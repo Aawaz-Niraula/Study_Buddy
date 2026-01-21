@@ -46,7 +46,8 @@ About 97% of Earth's water is saltwater in oceans, while only 3% is freshwater t
     setQuestions(null);
 
     try {
-      const res = await fetch("http://localhost:8000/generate", {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+      const res = await fetch(`${backendUrl}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, mode }),
