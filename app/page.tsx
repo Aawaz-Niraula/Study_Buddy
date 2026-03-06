@@ -1,18 +1,241 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { toast } from "sonner";
+import { Sparkles, BookOpen, ToggleLeft, AlignLeft, Layers, ChevronDown, ChevronUp } from "lucide-react";
+
+const GLOBAL_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=DM+Mono:wght@300;400;500&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #05050e; overflow-x: hidden; }
+  ::-webkit-scrollbar { width: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3b1f6a; border-radius: 99px; }
+  ::selection { background: #7c3aed44; color: #e9d5ff; }
+  textarea:focus { outline: none; }
+  textarea::placeholder { color: #374151; }
+
+  @keyframes float-orb {
+    0%, 100% { transform: translate(0,0) scale(1); }
+    33% { transform: translate(30px,-40px) scale(1.08); }
+    66% { transform: translate(-20px,20px) scale(0.94); }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes shimmer-x {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+  }
+  @keyframes spin-icon {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes dot-bounce {
+    0%, 100% { transform: translateY(0); opacity: 0.4; }
+    50% { transform: translateY(-5px); opacity: 1; }
+  }
+  @keyframes card-in {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes grid-drift {
+    0% { transform: translateX(0) translateY(0); }
+    100% { transform: translateX(40px) translateY(40px); }
+  }
+  @keyframes flip-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+`;
+
+const modeOptions = [
+  { value: "mix", label: "Mixed", icon: Layers },
+  { value: "multiple-choice", label: "Multiple Choice", icon: BookOpen },
+  { value: "short-answer", label: "Short Answer", icon: AlignLeft },
+  { value: "true-false", label: "True / False", icon: ToggleLeft },
+  { value: "flashcard", label: "Flashcards", icon: Sparkles },
+];
+
+function Background() {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 0, overflow: "hidden", pointerEvents: "none" }}>
+      <div style={{ position: "absolute", inset: "-40px", backgroundImage: "linear-gradient(rgba(124,58,237,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(124,58,237,0.04) 1px, transparent 1px)", backgroundSize: "60px 60px", animation: "grid-drift 20s linear infinite" }} />
+      <div style={{ position: "absolute", top: "-10%", left: "-5%", width: 600, height: 600, borderRadius: "50%", background: "radial-gradient(circle, #4c1d9522 0%, transparent 70%)", animation: "float-orb 18s ease-in-out infinite", filter: "blur(1px)" }} />
+      <div style={{ position: "absolute", bottom: "-15%", right: "-10%", width: 700, height: 700, borderRadius: "50%", background: "radial-gradient(circle, #6d28d91a 0%, transparent 70%)", animation: "float-orb 24s ease-in-out infinite reverse", filter: "blur(1px)" }} />
+      <div style={{ position: "absolute", top: "45%", right: "15%", width: 350, height: 350, borderRadius: "50%", background: "radial-gradient(circle, #be185d0e 0%, transparent 70%)", animation: "float-orb 15s ease-in-out infinite 5s" }} />
+      <div style={{ position: "absolute", inset: 0, opacity: 0.02, backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`, backgroundSize: "200px" }} />
+    </div>
+  );
+}
+
+function SectionLabel({ text, color }: { text: string; color: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <div style={{ width: 5, height: 5, borderRadius: "50%", background: color, boxShadow: `0 0 10px ${color}` }} />
+      <span style={{ fontSize: 11, letterSpacing: 3, color, fontWeight: 500, fontFamily: "'DM Mono', monospace", textTransform: "uppercase" }}>{text}</span>
+      <div style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${color}44, transparent)` }} />
+    </div>
+  );
+}
+
+function GlassCard({ children, accent = "#7c3aed", delay = 0, style = {} }: {
+  children: React.ReactNode; accent?: string; delay?: number; style?: React.CSSProperties;
+}) {
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)",
+      backdropFilter: "blur(20px)",
+      border: `1px solid ${accent}33`,
+      borderLeft: `2px solid ${accent}`,
+      borderRadius: 16,
+      padding: "20px 24px",
+      position: "relative",
+      overflow: "hidden",
+      animation: `card-in 0.5s cubic-bezier(0.22,1,0.36,1) ${delay}ms both`,
+      boxShadow: `0 8px 32px ${accent}0d, inset 0 1px 0 rgba(255,255,255,0.04)`,
+      ...style,
+    }}>
+      <div style={{ position: "absolute", inset: 0, background: `linear-gradient(105deg, transparent 40%, ${accent}07 50%, transparent 60%)`, animation: "shimmer-x 5s ease-in-out infinite", pointerEvents: "none" }} />
+      {children}
+    </div>
+  );
+}
+
+function Flashcard({ q, idx, delay }: { q: any; idx: number; delay: number }) {
+  const [flipped, setFlipped] = useState(false);
+  return (
+    <div onClick={() => setFlipped(f => !f)} style={{ animation: `flip-in 0.5s cubic-bezier(0.22,1,0.36,1) ${delay}ms both`, cursor: "pointer" }}>
+      <div style={{
+        background: flipped ? "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(109,40,217,0.08))" : "linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))",
+        border: `1px solid ${flipped ? "#7c3aed66" : "#7c3aed22"}`,
+        borderLeft: `2px solid ${flipped ? "#a78bfa" : "#7c3aed"}`,
+        borderRadius: 16, padding: "22px 24px", position: "relative", overflow: "hidden",
+        boxShadow: flipped ? "0 8px 40px rgba(124,58,237,0.2)" : "0 4px 20px rgba(124,58,237,0.06)",
+        transition: "all 0.35s cubic-bezier(0.22,1,0.36,1)", minHeight: 90,
+      }}>
+        <div style={{ position: "absolute", top: 14, right: 16, fontSize: 9, color: flipped ? "#a78bfa" : "#4b5563", fontFamily: "'DM Mono', monospace", letterSpacing: 2 }}>
+          {flipped ? "ANSWER" : "TAP TO REVEAL"}
+        </div>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "'DM Mono', monospace", marginTop: 2, flexShrink: 0 }}>{String(idx + 1).padStart(2, "0")}</span>
+          <p style={{ fontSize: 14, color: flipped ? "#e9d5ff" : "#d1d5db", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, transition: "color 0.3s", paddingRight: 80 }}>
+            {flipped ? q.answer : q.question}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MCQCard({ q, idx, delay }: { q: any; idx: number; delay: number }) {
+  const [revealed, setRevealed] = useState(false);
+  const options = q.options ? q.options.split("\n").filter((o: string) => o.trim()) : [];
+  const correctLetter = typeof q.answer === "string" ? q.answer.trim().toUpperCase().charAt(0) : "";
+  return (
+    <GlassCard accent="#a78bfa" delay={delay}>
+      <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
+        <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "'DM Mono', monospace", marginTop: 2, flexShrink: 0 }}>{String(idx + 1).padStart(2, "0")}</span>
+        <p style={{ fontSize: 14, color: "#f3f4f6", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, fontWeight: 500 }}>{q.question}</p>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginLeft: 28, marginBottom: 14 }}>
+        {options.map((opt: string, i: number) => {
+          const letter = opt.trim().charAt(0).toUpperCase();
+          const isCorrect = revealed && letter === correctLetter;
+          return (
+            <div key={i} style={{
+              padding: "10px 14px", borderRadius: 10,
+              background: isCorrect ? "rgba(167,139,250,0.15)" : "rgba(255,255,255,0.02)",
+              border: `1px solid ${isCorrect ? "#a78bfa55" : "rgba(255,255,255,0.06)"}`,
+              fontSize: 13, color: isCorrect ? "#e9d5ff" : "#9ca3af",
+              fontFamily: "'DM Mono', monospace", lineHeight: 1.5,
+              transition: "all 0.3s ease",
+              boxShadow: isCorrect ? "0 0 16px rgba(167,139,250,0.15)" : "none",
+            }}>{opt}</div>
+          );
+        })}
+      </div>
+      <button onClick={() => setRevealed(r => !r)} style={{
+        marginLeft: 28, padding: "8px 16px", borderRadius: 99,
+        border: "1px solid rgba(167,139,250,0.3)",
+        background: revealed ? "rgba(167,139,250,0.15)" : "transparent",
+        color: revealed ? "#e9d5ff" : "#7c6fa0", cursor: "pointer", fontSize: 11,
+        fontFamily: "'DM Mono', monospace", letterSpacing: 2,
+        display: "flex", alignItems: "center", gap: 6, transition: "all 0.25s ease",
+      }}>
+        {revealed ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
+        {revealed ? `ANSWER: ${correctLetter}` : "REVEAL ANSWER"}
+      </button>
+    </GlassCard>
+  );
+}
+
+function ShortAnswerCard({ q, idx, delay }: { q: any; idx: number; delay: number }) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <GlassCard accent="#34d399" delay={delay}>
+      <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
+        <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "'DM Mono', monospace", marginTop: 2, flexShrink: 0 }}>{String(idx + 1).padStart(2, "0")}</span>
+        <p style={{ fontSize: 14, color: "#f3f4f6", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, fontWeight: 500 }}>{q.question}</p>
+      </div>
+      {revealed && (
+        <div style={{ marginLeft: 28, padding: "12px 16px", borderRadius: 10, background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.2)", marginBottom: 12 }}>
+          <p style={{ fontSize: 13, color: "#6ee7b7", fontFamily: "'DM Mono', monospace", lineHeight: 1.7 }}>{q.answer}</p>
+        </div>
+      )}
+      <button onClick={() => setRevealed(r => !r)} style={{
+        marginLeft: 28, padding: "8px 16px", borderRadius: 99,
+        border: "1px solid rgba(52,211,153,0.3)",
+        background: revealed ? "rgba(52,211,153,0.1)" : "transparent",
+        color: revealed ? "#6ee7b7" : "#4b7a6a", cursor: "pointer", fontSize: 11,
+        fontFamily: "'DM Mono', monospace", letterSpacing: 2,
+        display: "flex", alignItems: "center", gap: 6, transition: "all 0.25s ease",
+      }}>
+        {revealed ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
+        {revealed ? "HIDE ANSWER" : "REVEAL ANSWER"}
+      </button>
+    </GlassCard>
+  );
+}
+
+function TrueFalseCard({ q, idx, delay }: { q: any; idx: number; delay: number }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  // Safely handle both boolean true/false and string "True"/"False" from backend
+  const correctAnswer = typeof q.answer === "boolean"
+    ? (q.answer ? "True" : "False")
+    : String(q.answer).trim().charAt(0).toUpperCase() + String(q.answer).trim().slice(1).toLowerCase();
+
+  return (
+    <GlassCard accent="#f87171" delay={delay}>
+      <div style={{ display: "flex", gap: 14, marginBottom: 18 }}>
+        <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "'DM Mono', monospace", marginTop: 2, flexShrink: 0 }}>{String(idx + 1).padStart(2, "0")}</span>
+        <p style={{ fontSize: 14, color: "#f3f4f6", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, fontWeight: 500 }}>{q.statement}</p>
+      </div>
+      <div style={{ display: "flex", gap: 10, marginLeft: 28, alignItems: "center" }}>
+        {["True", "False"].map(option => {
+          const isCorrect = selected !== null && option === correctAnswer;
+          const isWrong = selected === option && option !== correctAnswer;
+          return (
+            <button key={option} onClick={() => setSelected(option)} style={{
+              padding: "10px 28px", borderRadius: 10, cursor: "pointer", fontSize: 13,
+              fontFamily: "'DM Mono', monospace", letterSpacing: 1, fontWeight: 500,
+              background: isCorrect ? "rgba(52,211,153,0.2)" : isWrong ? "rgba(248,113,113,0.2)" : "rgba(255,255,255,0.04)",
+              color: isCorrect ? "#6ee7b7" : isWrong ? "#fca5a5" : "#9ca3af",
+              border: `1px solid ${isCorrect ? "rgba(52,211,153,0.4)" : isWrong ? "rgba(248,113,113,0.4)" : "rgba(255,255,255,0.1)"}`,
+              transition: "all 0.25s ease",
+              boxShadow: isCorrect ? "0 0 16px rgba(52,211,153,0.2)" : "none",
+            }}>{option}</button>
+          );
+        })}
+        {selected && selected !== correctAnswer && (
+          <span style={{ fontSize: 11, color: "#6ee7b7", fontFamily: "'DM Mono', monospace", letterSpacing: 1, marginLeft: 4 }}>
+            ✓ {correctAnswer}
+          </span>
+        )}
+      </div>
+    </GlassCard>
+  );
+}
 
 export default function Home() {
   const sampleNotes = `The water cycle describes how water moves between the Earth's surface and the atmosphere.
@@ -27,24 +250,17 @@ Precipitation happens when clouds become heavy with water droplets and release t
 
 Collection is when the precipitation falls back to Earth and collects in bodies of water, soil, and underground aquifers.
 
-The water cycle is continuous and essential for life on Earth. It distributes fresh water across the planet and regulates temperature.
-
-About 97% of Earth's water is saltwater in oceans, while only 3% is freshwater that humans can use.`;
+The water cycle is continuous and essential for life on Earth. It distributes fresh water across the planet and regulates temperature.`;
 
   const [text, setText] = useState(sampleNotes);
   const [mode, setMode] = useState("mix");
   const [questions, setQuestions] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const handleGenerate = async () => {
-    if (!text.trim()) {
-      toast.error("Please enter some study notes first.");
-      return;
-    }
-
-    setLoading(true);
-    setQuestions(null);
-
+    if (!text.trim()) { setError("Please enter some study notes first."); return; }
+    setLoading(true); setQuestions(null); setError("");
     try {
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
       const res = await fetch(`${backendUrl}/generate`, {
@@ -52,155 +268,169 @@ About 97% of Earth's water is saltwater in oceans, while only 3% is freshwater t
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, mode }),
       });
-
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || "Failed to generate questions");
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server error ${res.status}`);
       }
-
       const data = await res.json();
       setQuestions(data);
     } catch (err: any) {
-      toast.error(err.message || "Something went wrong. Try again later.");
+      setError(err.message || "Something went wrong. Try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  const renderMultipleChoice = (items: any[]) => (
-    <div className="space-y-4">
-      {items.map((q, idx) => (
-        <Card key={idx} className="border p-4 shadow-sm">
-          <p className="font-semibold">{idx + 1}. {q.question}</p>
-          <div className="ml-4 mt-2 space-y-1">
-            {q.options.split("\n").map((opt: string, i: number) => (
-              <p key={i}>{opt}</p>
-            ))}
-          </div>
-          <p className="mt-2 font-bold text-green-600">Answer: {q.answer}</p>
-        </Card>
-      ))}
-    </div>
-  );
-
-  const renderShortAnswer = (items: any[]) => (
-    <div className="space-y-4">
-      {items.map((q, idx) => (
-        <Card key={idx} className="border p-4 shadow-sm">
-          <p className="font-semibold">{idx + 1}. {q.question}</p>
-          <p className="mt-2 font-bold text-green-600">Answer: {q.answer}</p>
-        </Card>
-      ))}
-    </div>
-  );
-
-  const renderTrueFalse = (items: any[]) => (
-    <div className="space-y-4">
-      {items.map((q, idx) => (
-        <Card key={idx} className="border p-4 shadow-sm">
-          <p className="font-semibold">{idx + 1}. {q.statement}</p>
-          <p className="mt-2 font-bold text-green-600">Answer: {q.answer ? "True" : "False"}</p>
-        </Card>
-      ))}
-    </div>
-  );
-
-  const renderFlashcards = (items: any[]) => (
-    <div className="space-y-4">
-      {items.map((q, idx) => (
-        <Card key={idx} className="border p-4 shadow-sm">
-          <p className="font-semibold">Q: {q.question}</p>
-          <p className="mt-1 font-bold text-green-600">A: {q.answer}</p>
-        </Card>
-      ))}
-    </div>
+  const hasResults = questions && (
+    questions.multiple_choice?.length > 0 ||
+    questions.short_answer?.length > 0 ||
+    questions.true_false?.length > 0 ||
+    questions.flashcards?.length > 0
   );
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900">
-      <div className="container mx-auto max-w-4xl px-4 py-12 md:py-20">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-            AI Study Buddy
+    <main style={{ minHeight: "100vh", background: "#05050e", color: "#e5e7eb", fontFamily: "'Cormorant Garamond', serif", position: "relative" }}>
+      <style>{GLOBAL_CSS}</style>
+      <Background />
+
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "64px 24px 80px", position: "relative", zIndex: 1 }}>
+
+        {/* Hero */}
+        <div style={{ textAlign: "center", marginBottom: 52, animation: "fade-up 0.7s cubic-bezier(0.22,1,0.36,1) both" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", marginBottom: 16 }}>
+            <div style={{ height: 1, width: 32, background: "linear-gradient(90deg, transparent, #7c3aed)" }} />
+            <span style={{ fontSize: 10, color: "#7c3aed", letterSpacing: 5, fontFamily: "'DM Mono', monospace" }}>AI STUDY BUDDY</span>
+            <div style={{ height: 1, width: 32, background: "linear-gradient(90deg, #7c3aed, transparent)" }} />
+          </div>
+          <h1 style={{ fontSize: "clamp(36px, 5.5vw, 56px)", fontWeight: 600, lineHeight: 1.15, letterSpacing: -0.5, marginBottom: 16 }}>
+            <span style={{ color: "#f3f4f6" }}>Turn notes into</span><br />
+            <span style={{ background: "linear-gradient(135deg, #c4b5fd, #f9a8d4)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontStyle: "italic", fontWeight: 400 }}>smart questions.</span>
           </h1>
-          <p className="mt-4 text-lg text-slate-600 dark:text-slate-400">
-            Turn your notes into smart questions — powered by Gemini
+          <p style={{ fontSize: 13, color: "#8b8fa8", fontFamily: "'DM Mono', monospace", letterSpacing: 1 }}>
+            Powered by Groq · Instant · Free
           </p>
         </div>
 
-        {/* Input Form */}
-        <Card className="border-2 shadow-xl">
-          <CardHeader>
-            <CardTitle className="text-2xl">Generate Questions</CardTitle>
-            <CardDescription>Paste your notes and select question type</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="notes">Your Study Notes</Label>
-              <Textarea
-                id="notes"
-                placeholder="Paste notes here..."
-                className="min-h-[180px] resize-y"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-              />
-            </div>
+        {/* Input Card */}
+        <div style={{
+          background: "linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))",
+          backdropFilter: "blur(20px)", border: "1px solid rgba(124,58,237,0.2)", borderRadius: 24,
+          padding: "32px", marginBottom: 32,
+          boxShadow: "0 20px 60px rgba(124,58,237,0.08), inset 0 1px 0 rgba(255,255,255,0.05)",
+          animation: "fade-up 0.7s cubic-bezier(0.22,1,0.36,1) 0.1s both",
+          position: "relative", overflow: "hidden",
+        }}>
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(105deg, transparent 40%, rgba(124,58,237,0.04) 50%, transparent 60%)", animation: "shimmer-x 6s ease-in-out infinite", pointerEvents: "none" }} />
 
-            <div className="space-y-2">
-              <Label htmlFor="mode">Question Type</Label>
-              <Select value={mode} onValueChange={setMode}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select mode" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="mix">Mixed</SelectItem>
-                  <SelectItem value="multiple-choice">Multiple Choice</SelectItem>
-                  <SelectItem value="short-answer">Short Answer</SelectItem>
-                  <SelectItem value="true-false">True/False</SelectItem>
-                  <SelectItem value="flashcard">Flashcards</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>YOUR NOTES</div>
+            <textarea value={text} onChange={e => setText(e.target.value)}
+              placeholder="Paste your study notes here..."
+              style={{
+                width: "100%", minHeight: 180, resize: "vertical",
+                background: "rgba(124,58,237,0.05)", border: "1px solid rgba(124,58,237,0.2)",
+                borderRadius: 14, padding: "16px 18px", fontSize: 13, color: "#d1d5db",
+                fontFamily: "'DM Mono', monospace", lineHeight: 1.8, letterSpacing: 0.3,
+                transition: "border-color 0.25s, box-shadow 0.25s",
+              }}
+              onFocus={e => { e.target.style.borderColor = "#7c3aed"; e.target.style.boxShadow = "0 0 0 3px rgba(124,58,237,0.1)"; }}
+              onBlur={e => { e.target.style.borderColor = "rgba(124,58,237,0.2)"; e.target.style.boxShadow = "none"; }}
+            />
+          </div>
 
-            <Button
-              onClick={handleGenerate}
-              disabled={loading}
-              className="w-full h-12 text-lg font-medium bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
-            >
-              {loading ? "Generating..." : "Generate Questions ✨"}
-            </Button>
-          </CardContent>
-        </Card>
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 12 }}>QUESTION TYPE</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {modeOptions.map(opt => {
+                const Icon = opt.icon;
+                const active = mode === opt.value;
+                return (
+                  <button key={opt.value} onClick={() => setMode(opt.value)} style={{
+                    padding: "10px 16px", borderRadius: 12, cursor: "pointer", fontSize: 12,
+                    fontFamily: "'DM Mono', monospace", letterSpacing: 1,
+                    background: active ? "linear-gradient(135deg, #4c1d95, #7c3aed)" : "rgba(124,58,237,0.06)",
+                    color: active ? "#e9d5ff" : "#6b7280",
+                    border: `1px solid ${active ? "#7c3aed" : "rgba(124,58,237,0.2)"}`,
+                    boxShadow: active ? "0 0 20px rgba(124,58,237,0.35)" : "none",
+                    transition: "all 0.25s cubic-bezier(0.22,1,0.36,1)",
+                    display: "flex", alignItems: "center", gap: 7,
+                  }}
+                    onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(124,58,237,0.5)"; (e.currentTarget as HTMLButtonElement).style.color = "#c4b5fd"; }}}
+                    onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(124,58,237,0.2)"; (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}}
+                  >
+                    <Icon style={{ width: 13, height: 13 }} />
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {error && (
+            <div style={{ marginBottom: 16, padding: "12px 16px", borderRadius: 10, background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)" }}>
+              <p style={{ fontSize: 12, color: "#fca5a5", fontFamily: "'DM Mono', monospace" }}>{error}</p>
+            </div>
+          )}
+
+          <button onClick={handleGenerate} disabled={loading} style={{
+            width: "100%", padding: "18px", borderRadius: 14, border: "none",
+            cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.8 : 1,
+            background: loading ? "rgba(124,58,237,0.3)" : "linear-gradient(135deg, #4c1d95, #7c3aed, #6d28d9)",
+            color: "#e9d5ff", fontWeight: 500, fontSize: 13,
+            fontFamily: "'DM Mono', monospace", letterSpacing: 3,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+            boxShadow: loading ? "none" : "0 0 32px rgba(124,58,237,0.45), 0 4px 20px rgba(124,58,237,0.3)",
+            transition: "all 0.3s ease", position: "relative", overflow: "hidden",
+          }}>
+            {!loading && <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)", animation: "shimmer-x 3s ease-in-out infinite" }} />}
+            {loading ? (
+              <>
+                {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: `dot-bounce 0.8s ${i * 0.2}s ease-in-out infinite` }} />)}
+                <span>GENERATING</span>
+              </>
+            ) : (
+              <>
+                <Sparkles style={{ width: 15, height: 15 }} />
+                <span>GENERATE QUESTIONS</span>
+              </>
+            )}
+          </button>
+        </div>
 
         {/* Results */}
-        {questions && (
-          <div className="mt-10 space-y-8">
+        {hasResults && (
+          <div style={{ animation: "fade-up 0.6s cubic-bezier(0.22,1,0.36,1) both" }}>
             {questions.multiple_choice?.length > 0 && (
-              <>
-                <h2 className="text-xl font-bold">Multiple Choice</h2>
-                {renderMultipleChoice(questions.multiple_choice)}
-              </>
+              <div style={{ marginBottom: 36 }}>
+                <SectionLabel text={`Multiple Choice · ${questions.multiple_choice.length} questions`} color="#a78bfa" />
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {questions.multiple_choice.map((q: any, i: number) => <MCQCard key={i} q={q} idx={i} delay={i * 70} />)}
+                </div>
+              </div>
             )}
-
             {questions.short_answer?.length > 0 && (
-              <>
-                <h2 className="text-xl font-bold">Short Answer</h2>
-                {renderShortAnswer(questions.short_answer)}
-              </>
+              <div style={{ marginBottom: 36 }}>
+                <SectionLabel text={`Short Answer · ${questions.short_answer.length} questions`} color="#34d399" />
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {questions.short_answer.map((q: any, i: number) => <ShortAnswerCard key={i} q={q} idx={i} delay={i * 70} />)}
+                </div>
+              </div>
             )}
-
             {questions.true_false?.length > 0 && (
-              <>
-                <h2 className="text-xl font-bold">True/False</h2>
-                {renderTrueFalse(questions.true_false)}
-              </>
+              <div style={{ marginBottom: 36 }}>
+                <SectionLabel text={`True / False · ${questions.true_false.length} questions`} color="#f87171" />
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {questions.true_false.map((q: any, i: number) => <TrueFalseCard key={i} q={q} idx={i} delay={i * 70} />)}
+                </div>
+              </div>
             )}
-
             {questions.flashcards?.length > 0 && (
-              <>
-                <h2 className="text-xl font-bold">Flashcards</h2>
-                {renderFlashcards(questions.flashcards)}
-              </>
+              <div style={{ marginBottom: 36 }}>
+                <SectionLabel text={`Flashcards · ${questions.flashcards.length} cards · tap to flip`} color="#c4b5fd" />
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {questions.flashcards.map((q: any, i: number) => <Flashcard key={i} q={q} idx={i} delay={i * 70} />)}
+                </div>
+              </div>
             )}
           </div>
         )}
