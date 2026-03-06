@@ -11,7 +11,7 @@ from groq import Groq
 from groq import RateLimitError, BadRequestError, AuthenticationError, APIError
 
 # ────────────────────────────────────────────────
-#                   CONFIG & SETUP
+# CONFIG & SETUP
 # ────────────────────────────────────────────────
 
 load_dotenv()
@@ -39,19 +39,19 @@ client = Groq(api_key=GROQ_API_KEY)
 DEFAULT_MODEL = "llama-3.1-8b-instant"
 ALLOWED_MODES = Literal["multiple-choice", "flashcard", "short-answer", "true-false", "mix"]
 
-
 # ────────────────────────────────────────────────
-#                   DATA MODEL
+# DATA MODEL
 # ────────────────────────────────────────────────
 
 class Notes(BaseModel):
     text: str = Field(..., min_length=10, max_length=12000)
     mode: ALLOWED_MODES = Field(default="mix")
 
+# ────────────────────────────────────────────────
+# PROMPTS
+# ────────────────────────────────────────────────
 
-# ────────────────────────────────────────────────
-#                   PROMPTS
-# ────────────────────────────────────────────────
+# FIX 1: options is now a JSON array of strings, not a newline-joined string
 
 SYSTEM_PROMPT = """You are a university-level study assistant. Generate high-quality study questions targeting key concepts.
 
@@ -59,16 +59,19 @@ You MUST output valid JSON only — no markdown, no code fences, no explanation,
 
 Output format:
 {
-  "multiple_choice": [{"question": "", "options": "A) ...\nB) ...\nC) ...\nD) ...", "answer": "A"}],
-  "short_answer": [{"question": "", "answer": ""}],
-  "true_false": [{"statement": "", "answer": "True"}],
-  "flashcards": [{"question": "", "answer": ""}]
+"multiple_choice": [{"question": "", "options": ["A) …", "B) …", "C) …", "D) …"], "answer": "A"}],
+"short_answer": [{"question": "", "answer": ""}],
+"true_false": [{"statement": "", "answer": "True"}],
+"flashcards": [{"question": "", "answer": ""}]
 }
 
 Rules:
-- multiple_choice: each option on its own line, answer is just the letter e.g. "B"
+
+- multiple_choice: options MUST be a JSON array of strings, e.g. ["A) Paris", "B) London", "C) Rome", "D) Berlin"]
+- multiple_choice: answer is just the letter e.g. "B"
 - true_false: answer is exactly "True" or "False"
 - Always include all four keys in the JSON even if the array is empty
+- Do NOT use actual newline characters inside any string value
 - Do NOT wrap output in ```json or any markdown
 """
 
@@ -99,9 +102,40 @@ def build_user_prompt(mode: str, text: str) -> str:
         f"Source text:\n{text.strip()}"
     )
 
+# ────────────────────────────────────────────────
+# HELPERS
+# ────────────────────────────────────────────────
+
+# FIX 2: escape any literal control characters inside JSON string values
+
+def escape_control_chars_in_strings(s: str) -> str:
+    result = []
+    in_string = False
+    escape_next = False
+    for ch in s:
+        if escape_next:
+            result.append(ch)
+            escape_next = False
+        elif ch == '\\' and in_string:
+            result.append(ch)
+            escape_next = True
+        elif ch == '"':
+            in_string = not in_string
+            result.append(ch)
+        elif in_string and ch == '\n':
+            result.append('\\n')
+        elif in_string and ch == '\r':
+            result.append('\\r')
+        elif in_string and ch == '\t':
+            result.append('\\t')
+        elif in_string and ord(ch) < 0x20:
+            result.append(f'\\u{ord(ch):04x}')
+        else:
+            result.append(ch)
+    return ''.join(result)
 
 # ────────────────────────────────────────────────
-#                   ENDPOINTS
+# ENDPOINTS
 # ────────────────────────────────────────────────
 
 @app.post("/generate")
@@ -133,17 +167,19 @@ async def generate_questions(notes: Notes):
         if json_match:
             try:
                 json_str = json_match.group()
-                # Clean control characters that break JSON parsing
-                json_str = json_str.replace('\t', '\\t')
-                json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', json_str)
-                # Remove other illegal control characters
-                json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', json_str)
+
+                # FIX 2: escape literal control characters inside string values
+                json_str = escape_control_chars_in_strings(json_str)
+
                 questions_data = json.loads(json_str)
+
                 # Ensure all keys exist
                 for key in ("multiple_choice", "short_answer", "true_false", "flashcards"):
                     if key not in questions_data:
                         questions_data[key] = []
+
                 return questions_data
+
             except json.JSONDecodeError as e:
                 raise HTTPException(500, f"Failed to parse model response as JSON: {str(e)}")
 
@@ -162,7 +198,6 @@ async def generate_questions(notes: Notes):
     except Exception as e:
         raise HTTPException(500, f"Server error: {str(e)}")
 
-
 @app.get("/health")
 async def health_check():
     try:
@@ -176,7 +211,6 @@ async def health_check():
         }
     except Exception as e:
         return {"status": "error", "detail": str(e)[:120]}
-
 
 if __name__ == "__main__":
     import uvicorn
