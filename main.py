@@ -132,7 +132,10 @@ async def generate_questions(notes: Notes):
         json_match = re.search(r'\{[\s\S]*\}', raw)
         if json_match:
             try:
-                questions_data = json.loads(json_match.group())
+                json_str = json_match.group()
+                # Remove unescaped control characters that break JSON parsing
+                json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', json_str)
+                questions_data = json.loads(json_str)
                 # Ensure all keys exist
                 for key in ("multiple_choice", "short_answer", "true_false", "flashcards"):
                     if key not in questions_data:
