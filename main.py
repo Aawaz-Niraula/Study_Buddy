@@ -133,10 +133,9 @@ async def generate_questions(notes: Notes):
         if json_match:
             try:
                 json_str = json_match.group()
-                # Fix unescaped newlines/tabs inside JSON string values
-                json_str = re.sub(r'(?<=[^\\])
-', '\\n', json_str)
-                json_str = re.sub(r'(?<=[^\\])	', '\\t', json_str)
+                # Clean control characters that break JSON parsing
+                json_str = json_str.replace('\t', '\\t')
+                json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', json_str)
                 # Remove other illegal control characters
                 json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', json_str)
                 questions_data = json.loads(json_str)
