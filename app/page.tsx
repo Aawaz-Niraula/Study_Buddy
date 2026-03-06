@@ -1,5 +1,4 @@
 "use client";
-
 import { useState } from "react";
 import { Sparkles, BookOpen, ToggleLeft, AlignLeft, Layers, ChevronDown, ChevronUp } from "lucide-react";
 
@@ -13,7 +12,6 @@ const GLOBAL_CSS = `
   ::selection { background: #7c3aed44; color: #e9d5ff; }
   textarea:focus { outline: none; }
   textarea::placeholder { color: #374151; }
-
   @keyframes float-orb {
     0%, 100% { transform: translate(0,0) scale(1); }
     33% { transform: translate(30px,-40px) scale(1.08); }
@@ -130,41 +128,79 @@ function Flashcard({ q, idx, delay }: { q: any; idx: number; delay: number }) {
 
 function MCQCard({ q, idx, delay }: { q: any; idx: number; delay: number }) {
   const [revealed, setRevealed] = useState(false);
-  const options = q.options ? q.options.split("\n").filter((o: string) => o.trim()) : [];
-  const correctLetter = typeof q.answer === "string" ? q.answer.trim().toUpperCase().charAt(0) : "";
+
+  // Fixed: safely handle array (current backend) or string (legacy format)
+  const options = Array.isArray(q.options)
+    ? q.options.filter((o: any) => typeof o === 'string' && o.trim())
+    : typeof q.options === 'string'
+      ? q.options.split("\n").filter((o: string) => o.trim())
+      : [];
+
+  // Robust answer letter extraction
+  const correctLetter = String(q.answer ?? "")
+    .trim()
+    .toUpperCase()
+    .match(/[A-D]/)?.[0] || "";
+
   return (
     <GlassCard accent="#a78bfa" delay={delay}>
       <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
-        <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "'DM Mono', monospace", marginTop: 2, flexShrink: 0 }}>{String(idx + 1).padStart(2, "0")}</span>
-        <p style={{ fontSize: 14, color: "#f3f4f6", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, fontWeight: 500 }}>{q.question}</p>
+        <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "'DM Mono', monospace", marginTop: 2, flexShrink: 0 }}>
+          {String(idx + 1).padStart(2, "0")}
+        </span>
+        <p style={{ fontSize: 14, color: "#f3f4f6", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, fontWeight: 500 }}>
+          {q.question}
+        </p>
       </div>
+
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginLeft: 28, marginBottom: 14 }}>
         {options.map((opt: string, i: number) => {
           const letter = opt.trim().charAt(0).toUpperCase();
           const isCorrect = revealed && letter === correctLetter;
+
           return (
-            <div key={i} style={{
-              padding: "10px 14px", borderRadius: 10,
-              background: isCorrect ? "rgba(167,139,250,0.15)" : "rgba(255,255,255,0.02)",
-              border: `1px solid ${isCorrect ? "#a78bfa55" : "rgba(255,255,255,0.06)"}`,
-              fontSize: 13, color: isCorrect ? "#e9d5ff" : "#9ca3af",
-              fontFamily: "'DM Mono', monospace", lineHeight: 1.5,
-              transition: "all 0.3s ease",
-              boxShadow: isCorrect ? "0 0 16px rgba(167,139,250,0.15)" : "none",
-            }}>{opt}</div>
+            <div
+              key={i}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                background: isCorrect ? "rgba(167,139,250,0.15)" : "rgba(255,255,255,0.02)",
+                border: `1px solid ${isCorrect ? "#a78bfa55" : "rgba(255,255,255,0.06)"}`,
+                fontSize: 13,
+                color: isCorrect ? "#e9d5ff" : "#9ca3af",
+                fontFamily: "'DM Mono', monospace",
+                lineHeight: 1.5,
+                transition: "all 0.3s ease",
+                boxShadow: isCorrect ? "0 0 16px rgba(167,139,250,0.15)" : "none",
+              }}
+            >
+              {opt}
+            </div>
           );
         })}
       </div>
-      <button onClick={() => setRevealed(r => !r)} style={{
-        marginLeft: 28, padding: "8px 16px", borderRadius: 99,
-        border: "1px solid rgba(167,139,250,0.3)",
-        background: revealed ? "rgba(167,139,250,0.15)" : "transparent",
-        color: revealed ? "#e9d5ff" : "#7c6fa0", cursor: "pointer", fontSize: 11,
-        fontFamily: "'DM Mono', monospace", letterSpacing: 2,
-        display: "flex", alignItems: "center", gap: 6, transition: "all 0.25s ease",
-      }}>
+
+      <button
+        onClick={() => setRevealed(r => !r)}
+        style={{
+          marginLeft: 28,
+          padding: "8px 16px",
+          borderRadius: 99,
+          border: "1px solid rgba(167,139,250,0.3)",
+          background: revealed ? "rgba(167,139,250,0.15)" : "transparent",
+          color: revealed ? "#e9d5ff" : "#7c6fa0",
+          cursor: "pointer",
+          fontSize: 11,
+          fontFamily: "'DM Mono', monospace",
+          letterSpacing: 2,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          transition: "all 0.25s ease",
+        }}
+      >
         {revealed ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
-        {revealed ? `ANSWER: ${correctLetter}` : "REVEAL ANSWER"}
+        {revealed ? `ANSWER: ${correctLetter || "?"}` : "REVEAL ANSWER"}
       </button>
     </GlassCard>
   );
@@ -200,7 +236,7 @@ function ShortAnswerCard({ q, idx, delay }: { q: any; idx: number; delay: number
 
 function TrueFalseCard({ q, idx, delay }: { q: any; idx: number; delay: number }) {
   const [selected, setSelected] = useState<string | null>(null);
-  // Safely handle both boolean true/false and string "True"/"False" from backend
+  // Safely handle both boolean and string answers
   const correctAnswer = typeof q.answer === "boolean"
     ? (q.answer ? "True" : "False")
     : String(q.answer).trim().charAt(0).toUpperCase() + String(q.answer).trim().slice(1).toLowerCase();
@@ -239,17 +275,11 @@ function TrueFalseCard({ q, idx, delay }: { q: any; idx: number; delay: number }
 
 export default function Home() {
   const sampleNotes = `The water cycle describes how water moves between the Earth's surface and the atmosphere.
-
 The process has four main stages: evaporation, condensation, precipitation, and collection.
-
 Evaporation occurs when the sun's heat turns water from liquid into vapor. This happens from oceans, lakes, rivers, and even soil.
-
 Condensation is when water vapor cools and turns back into liquid droplets. This forms clouds in the atmosphere.
-
-Precipitation happens when clouds become heavy with water droplets and release them as rain, snow, sleet, or hail.
-
+Precipitation happens when clouds become heavy with water droplets and releases them as rain, snow, sleet, or hail.
 Collection is when the precipitation falls back to Earth and collects in bodies of water, soil, and underground aquifers.
-
 The water cycle is continuous and essential for life on Earth. It distributes fresh water across the planet and regulates temperature.`;
 
   const [text, setText] = useState(sampleNotes);
@@ -292,9 +322,7 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
     <main style={{ minHeight: "100vh", background: "#05050e", color: "#e5e7eb", fontFamily: "'Cormorant Garamond', serif", position: "relative" }}>
       <style>{GLOBAL_CSS}</style>
       <Background />
-
       <div style={{ maxWidth: 720, margin: "0 auto", padding: "64px 24px 80px", position: "relative", zIndex: 1 }}>
-
         {/* Hero */}
         <div style={{ textAlign: "center", marginBottom: 52, animation: "fade-up 0.7s cubic-bezier(0.22,1,0.36,1) both" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", marginBottom: 16 }}>
@@ -321,7 +349,6 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
           position: "relative", overflow: "hidden",
         }}>
           <div style={{ position: "absolute", inset: 0, background: "linear-gradient(105deg, transparent 40%, rgba(124,58,237,0.04) 50%, transparent 60%)", animation: "shimmer-x 6s ease-in-out infinite", pointerEvents: "none" }} />
-
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>YOUR NOTES</div>
             <textarea value={text} onChange={e => setText(e.target.value)}
@@ -337,7 +364,6 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
               onBlur={e => { e.target.style.borderColor = "rgba(124,58,237,0.2)"; e.target.style.boxShadow = "none"; }}
             />
           </div>
-
           <div style={{ marginBottom: 28 }}>
             <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 12 }}>QUESTION TYPE</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -365,13 +391,11 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
               })}
             </div>
           </div>
-
           {error && (
             <div style={{ marginBottom: 16, padding: "12px 16px", borderRadius: 10, background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)" }}>
               <p style={{ fontSize: 12, color: "#fca5a5", fontFamily: "'DM Mono', monospace" }}>{error}</p>
             </div>
           )}
-
           <button onClick={handleGenerate} disabled={loading} style={{
             width: "100%", padding: "18px", borderRadius: 14, border: "none",
             cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.8 : 1,
