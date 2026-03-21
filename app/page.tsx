@@ -292,7 +292,7 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
     if (!text.trim()) { setError("Please enter some study notes first."); return; }
     setLoading(true); setQuestions(null); setError("");
     try {
-      const res = await fetch(`/.netlify/functions/generate`, {
+      const res = await fetch(`/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, mode }),
