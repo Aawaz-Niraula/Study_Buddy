@@ -2,6 +2,33 @@
 import { useState } from "react";
 import { Sparkles, BookOpen, ToggleLeft, AlignLeft, Layers, ChevronDown, ChevronUp } from "lucide-react";
 
+declare global {
+  interface Window {
+    pdfjsLib?: {
+      GlobalWorkerOptions: { workerSrc: string };
+      getDocument: (source: { data: Uint8Array }) => {
+        promise: Promise<{
+          numPages: number;
+          getPage: (pageNumber: number) => Promise<{
+            getTextContent: () => Promise<{
+              items: Array<{ str?: string }>;
+            }>;
+          }>;
+        }>;
+      };
+    };
+    Tesseract?: {
+      recognize: (
+        image: File,
+        language: string,
+        options?: {
+          logger?: (info: { status?: string; progress?: number }) => void;
+        }
+      ) => Promise<{ data: { text: string } }>;
+    };
+  }
+}
+
 const GLOBAL_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=DM+Mono:wght@300;400;500&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -54,6 +81,113 @@ const modeOptions = [
   { value: "true-false", label: "True / False", icon: ToggleLeft },
   { value: "flashcard", label: "Flashcards", icon: Sparkles },
 ];
+
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_PDF_SIZE_BYTES = 3 * 1024 * 1024;
+
+type Attachment = {
+  id: string;
+  name: string;
+  type: "pdf" | "image";
+  extractedText: string;
+};
+
+let pdfJsLoader: Promise<void> | null = null;
+let tesseractLoader: Promise<void> | null = null;
+
+function loadScript(src: string) {
+  return new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
+    if (existing) {
+      if (existing.dataset.loaded === "true") {
+        resolve();
+      } else {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error(`Failed to load script: ${src}`)), { once: true });
+      }
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.onload = () => {
+      script.dataset.loaded = "true";
+      resolve();
+    };
+    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+    document.head.appendChild(script);
+  });
+}
+
+async function ensurePdfJs() {
+  if (!pdfJsLoader) {
+    pdfJsLoader = loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js").then(() => {
+      if (!window.pdfjsLib) {
+        throw new Error("PDF reader failed to load.");
+      }
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    });
+  }
+  await pdfJsLoader;
+}
+
+async function ensureTesseract() {
+  if (!tesseractLoader) {
+    tesseractLoader = loadScript("https://unpkg.com/tesseract.js@5/dist/tesseract.min.js").then(() => {
+      if (!window.Tesseract) {
+        throw new Error("Image reader failed to load.");
+      }
+    });
+  }
+  await tesseractLoader;
+}
+
+async function extractPdfText(file: File) {
+  await ensurePdfJs();
+  if (!window.pdfjsLib) {
+    throw new Error("PDF reader is unavailable.");
+  }
+
+  const buffer = await file.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .map((item) => item.str?.trim() ?? "")
+      .filter(Boolean)
+      .join(" ");
+    if (pageText) {
+      pages.push(pageText);
+    }
+  }
+
+  return pages.join("\n");
+}
+
+async function extractImageText(
+  file: File,
+  onProgress: (message: string) => void
+) {
+  await ensureTesseract();
+  if (!window.Tesseract) {
+    throw new Error("Image reader is unavailable.");
+  }
+
+  const result = await window.Tesseract.recognize(file, "eng", {
+    logger: (info) => {
+      if (info.status === "recognizing text" && typeof info.progress === "number") {
+        onProgress(`Reading image text... ${Math.round(info.progress * 100)}%`);
+      }
+    },
+  });
+
+  return result.data.text;
+}
 
 function Background() {
   return (
@@ -287,15 +421,95 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
   const [questions, setQuestions] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
+
+  const combinedText = [text.trim(), ...attachments.map((item) => item.extractedText.trim()).filter(Boolean)]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const handleFilesAdded = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) {
+      return;
+    }
+
+    setUploading(true);
+    setError("");
+    setUploadStatus("Preparing files...");
+
+    try {
+      const parsed: Attachment[] = [];
+
+      for (const file of files) {
+        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+        const isImage = file.type.startsWith("image/");
+
+        if (!isPdf && !isImage) {
+          throw new Error(`${file.name}: only PDF and image files are supported.`);
+        }
+
+        if (isPdf && file.size > MAX_PDF_SIZE_BYTES) {
+          throw new Error(`${file.name}: PDF is too large. Please keep it under 3 MB.`);
+        }
+
+        if (isImage && file.size > MAX_IMAGE_SIZE_BYTES) {
+          throw new Error(`${file.name}: image is too large. Please keep it under 5 MB.`);
+        }
+
+        setUploadStatus(`Extracting text from ${file.name}...`);
+        const extractedText = isPdf
+          ? await extractPdfText(file)
+          : await extractImageText(file, setUploadStatus);
+
+        if (!extractedText.trim()) {
+          throw new Error(`${file.name}: no readable text was found.`);
+        }
+
+        parsed.push({
+          id: `${file.name}-${file.size}-${file.lastModified}`,
+          name: file.name,
+          type: isPdf ? "pdf" : "image",
+          extractedText: extractedText.trim(),
+        });
+      }
+
+      setAttachments((current) => {
+        const next = [...current];
+        for (const item of parsed) {
+          const index = next.findIndex((existing) => existing.id === item.id);
+          if (index >= 0) {
+            next[index] = item;
+          } else {
+            next.push(item);
+          }
+        }
+        return next;
+      });
+
+      setUploadStatus(`Added ${parsed.length} file${parsed.length === 1 ? "" : "s"} successfully.`);
+    } catch (err: any) {
+      setError(err.message || "Could not read the selected file.");
+      setUploadStatus("");
+    } finally {
+      event.target.value = "";
+      setUploading(false);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((current) => current.filter((item) => item.id !== id));
+  };
 
   const handleGenerate = async () => {
-    if (!text.trim()) { setError("Please enter some study notes first."); return; }
+    if (!combinedText.trim()) { setError("Please enter notes or upload a small PDF/photo first."); return; }
     setLoading(true); setQuestions(null); setError("");
     try {
-      const res = await fetch(`/api/generate`, {
+      const res = await fetch(`/.netlify/functions/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, mode }),
+        body: JSON.stringify({ text: combinedText, mode }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -351,7 +565,7 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>YOUR NOTES</div>
             <textarea value={text} onChange={e => setText(e.target.value)}
-              placeholder="Paste your study notes here..."
+              placeholder="Paste your study notes here, or upload a small PDF/image below..."
               style={{
                 width: "100%", minHeight: 180, resize: "vertical",
                 background: "rgba(124,58,237,0.05)", border: "1px solid rgba(124,58,237,0.2)",
@@ -362,6 +576,88 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
               onFocus={e => { e.target.style.borderColor = "#7c3aed"; e.target.style.boxShadow = "0 0 0 3px rgba(124,58,237,0.1)"; }}
               onBlur={e => { e.target.style.borderColor = "rgba(124,58,237,0.2)"; e.target.style.boxShadow = "none"; }}
             />
+          </div>
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 12 }}>PDFS & PHOTOS</div>
+            <div style={{
+              border: "1px dashed rgba(124,58,237,0.32)",
+              background: "rgba(124,58,237,0.04)",
+              borderRadius: 14,
+              padding: 16,
+            }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: attachments.length > 0 || uploadStatus ? 14 : 0 }}>
+                <label style={{
+                  padding: "10px 16px",
+                  borderRadius: 12,
+                  cursor: uploading ? "not-allowed" : "pointer",
+                  background: "rgba(124,58,237,0.12)",
+                  border: "1px solid rgba(124,58,237,0.24)",
+                  color: "#d8b4fe",
+                  fontSize: 12,
+                  fontFamily: "'DM Mono', monospace",
+                  letterSpacing: 1,
+                  opacity: uploading ? 0.7 : 1,
+                }}>
+                  <input
+                    type="file"
+                    accept="application/pdf,image/*"
+                    multiple
+                    disabled={uploading}
+                    onChange={handleFilesAdded}
+                    style={{ display: "none" }}
+                  />
+                  {uploading ? "READING FILES..." : "ADD PDF OR PHOTO"}
+                </label>
+                <p style={{ fontSize: 11, color: "#7c84a3", fontFamily: "'DM Mono', monospace", lineHeight: 1.6 }}>
+                  Small files only. PDFs up to 3 MB, photos up to 5 MB.
+                </p>
+              </div>
+              {uploadStatus && (
+                <p style={{ fontSize: 11, color: "#c4b5fd", fontFamily: "'DM Mono', monospace", marginBottom: attachments.length > 0 ? 12 : 0 }}>
+                  {uploadStatus}
+                </p>
+              )}
+              {attachments.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {attachments.map((item) => (
+                    <div key={item.id} style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.06)",
+                    }}>
+                      <div>
+                        <p style={{ fontSize: 12, color: "#e5e7eb", fontFamily: "'DM Mono', monospace" }}>{item.name}</p>
+                        <p style={{ fontSize: 10, color: "#8b8fa8", fontFamily: "'DM Mono', monospace", letterSpacing: 1.2 }}>
+                          {item.type === "pdf" ? "PDF TEXT EXTRACTED" : "PHOTO TEXT EXTRACTED"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(item.id)}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: 10,
+                          border: "1px solid rgba(248,113,113,0.2)",
+                          background: "rgba(248,113,113,0.06)",
+                          color: "#fca5a5",
+                          cursor: "pointer",
+                          fontSize: 11,
+                          fontFamily: "'DM Mono', monospace",
+                          letterSpacing: 1,
+                        }}
+                      >
+                        REMOVE
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <div style={{ marginBottom: 28 }}>
             <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 12 }}>QUESTION TYPE</div>
