@@ -408,15 +408,7 @@ function TrueFalseCard({ q, idx, delay }: { q: any; idx: number; delay: number }
 }
 
 export default function Home() {
-  const sampleNotes = `The water cycle describes how water moves between the Earth's surface and the atmosphere.
-The process has four main stages: evaporation, condensation, precipitation, and collection.
-Evaporation occurs when the sun's heat turns water from liquid into vapor. This happens from oceans, lakes, rivers, and even soil.
-Condensation is when water vapor cools and turns back into liquid droplets. This forms clouds in the atmosphere.
-Precipitation happens when clouds become heavy with water droplets and releases them as rain, snow, sleet, or hail.
-Collection is when the precipitation falls back to Earth and collects in bodies of water, soil, and underground aquifers.
-The water cycle is continuous and essential for life on Earth. It distributes fresh water across the planet and regulates temperature.`;
-
-  const [text, setText] = useState(sampleNotes);
+  const [text, setText] = useState("");
   const [mode, setMode] = useState("mix");
   const [questions, setQuestions] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -432,6 +424,12 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
   const handleFilesAdded = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) {
+      return;
+    }
+
+    if (text.trim()) {
+      setError("Clear your pasted notes before adding a PDF or photo.");
+      event.target.value = "";
       return;
     }
 
@@ -502,6 +500,17 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
     setAttachments((current) => current.filter((item) => item.id !== id));
   };
 
+  const handleTextChange = (value: string) => {
+    if (attachments.length > 0) {
+      setError("Remove your uploaded PDF/photo before pasting notes.");
+      return;
+    }
+    if (error) {
+      setError("");
+    }
+    setText(value);
+  };
+
   const handleGenerate = async () => {
     if (!combinedText.trim()) { setError("Please enter notes or upload a small PDF/photo first."); return; }
     setLoading(true); setQuestions(null); setError("");
@@ -564,7 +573,7 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
           <div style={{ position: "absolute", inset: 0, background: "linear-gradient(105deg, transparent 40%, rgba(124,58,237,0.04) 50%, transparent 60%)", animation: "shimmer-x 6s ease-in-out infinite", pointerEvents: "none" }} />
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 10, color: "#8b8fa8", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>YOUR NOTES</div>
-            <textarea value={text} onChange={e => setText(e.target.value)}
+            <textarea value={text} onChange={e => handleTextChange(e.target.value)}
               placeholder="Paste your study notes here, or upload a small PDF/image below..."
               style={{
                 width: "100%", minHeight: 180, resize: "vertical",
@@ -575,6 +584,7 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
               }}
               onFocus={e => { e.target.style.borderColor = "#7c3aed"; e.target.style.boxShadow = "0 0 0 3px rgba(124,58,237,0.1)"; }}
               onBlur={e => { e.target.style.borderColor = "rgba(124,58,237,0.2)"; e.target.style.boxShadow = "none"; }}
+              disabled={attachments.length > 0}
             />
           </div>
           <div style={{ marginBottom: 28 }}>
@@ -602,7 +612,7 @@ The water cycle is continuous and essential for life on Earth. It distributes fr
                     type="file"
                     accept="application/pdf,image/*"
                     multiple
-                    disabled={uploading}
+                    disabled={uploading || Boolean(text.trim())}
                     onChange={handleFilesAdded}
                     style={{ display: "none" }}
                   />
