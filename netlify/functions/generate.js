@@ -1,70 +1,134 @@
-export default async (request) => {
+const DEFAULT_MODEL = "llama-3.1-8b-instant";
+const ALLOWED_MODES = new Set([
+  "multiple-choice",
+  "flashcard",
+  "short-answer",
+  "true-false",
+  "mix",
+]);
+
+const SYSTEM_PROMPT = `You are a university-level study assistant. Generate high-quality study questions targeting key concepts.
+
+You MUST output valid JSON only with no markdown, code fences, or explanation.
+
+Output format:
+{
+  "multiple_choice": [{"question": "", "options": ["A) ...", "B) ...", "C) ...", "D) ..."], "answer": "A"}],
+  "short_answer": [{"question": "", "answer": ""}],
+  "true_false": [{"statement": "", "answer": "True"}],
+  "flashcards": [{"question": "", "answer": ""}]
+}
+
+Rules:
+- multiple_choice options must be a JSON array of strings
+- multiple_choice answer is just the letter, for example "B"
+- true_false answer is exactly "True" or "False"
+- Always include all four keys even if some arrays are empty
+- Do not put actual newline characters inside string values`;
+
+function makeResponse(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+    },
+  });
+}
+
+function buildUserPrompt(mode, text) {
+  const instructions = {
+    "multiple-choice":
+      "Generate 8 to 10 multiple-choice questions only. Set multiple_choice to a full array. Set short_answer, true_false, and flashcards to [].",
+    flashcard:
+      "Generate 10 to 15 flashcard pairs only. Set flashcards to a full array. Set multiple_choice, short_answer, and true_false to [].",
+    "short-answer":
+      "Generate 10 short-answer questions only. Set short_answer to a full array. Set multiple_choice, true_false, and flashcards to [].",
+    "true-false":
+      "Generate 12 true/false questions only. Set true_false to a full array. Set multiple_choice, short_answer, and flashcards to [].",
+    mix:
+      "Generate a balanced mix: 4 multiple-choice, 3 short-answer, 3 true/false, and 4 flashcards.",
+  };
+
+  return `${instructions[mode] ?? instructions.mix}\n\nSource text:\n${text.trim()}`;
+}
+
+function normalizeQuestionSet(data) {
+  const normalized = typeof data === "object" && data !== null ? data : {};
+  for (const key of ["multiple_choice", "short_answer", "true_false", "flashcards"]) {
+    if (!Array.isArray(normalized[key])) {
+      normalized[key] = [];
+    }
+  }
+  return normalized;
+}
+
+function parseModelJson(rawContent) {
+  const stripped = rawContent
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  const start = stripped.indexOf("{");
+  const end = stripped.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error("No JSON object found in model response");
+  }
+
+  return JSON.parse(stripped.slice(start, end + 1));
+}
+
+export default async function handler(request) {
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 200 });
+    return makeResponse(200, {});
   }
 
   if (request.method !== "POST") {
-    return new Response(JSON.stringify({ detail: "Method not allowed" }), { status: 405 });
+    return makeResponse(405, { detail: "Method not allowed" });
   }
 
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
-  if (!GROQ_API_KEY) {
-    return new Response(JSON.stringify({ detail: "GROQ_API_KEY not configured" }), { status: 500 });
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    return makeResponse(500, { detail: "GROQ_API_KEY not configured" });
   }
 
   let body;
   try {
     body = await request.json();
   } catch {
-    return new Response(JSON.stringify({ detail: "Invalid JSON body" }), { status: 400 });
+    return makeResponse(400, { detail: "Invalid JSON body" });
   }
 
-  const text = (body.text || "").trim();
-  const mode = body.mode || "mix";
-  const ALLOWED_MODES = ["multiple-choice", "flashcard", "short-answer", "true-false", "mix"];
+  const text = String(body?.text ?? "").trim();
+  const mode = String(body?.mode ?? "mix");
 
-  if (!text) return new Response(JSON.stringify({ detail: "Text cannot be empty" }), { status: 422 });
-  if (text.length < 10) return new Response(JSON.stringify({ detail: "Text too short" }), { status: 422 });
-  if (text.length > 12000) return new Response(JSON.stringify({ detail: "Text too long" }), { status: 422 });
-  if (!ALLOWED_MODES.includes(mode)) return new Response(JSON.stringify({ detail: "Invalid mode" }), { status: 422 });
-
-  const instructions = {
-    "multiple-choice": "Generate 8–10 multiple-choice questions only. Set multiple_choice to a full array. Set short_answer, true_false, flashcards to [].",
-    "flashcard": "Generate 10–15 flashcard pairs only. Set flashcards to a full array. Set multiple_choice, short_answer, true_false to [].",
-    "short-answer": "Generate 10 short-answer questions only. Set short_answer to a full array. Set multiple_choice, true_false, flashcards to [].",
-    "true-false": "Generate 12 true/false questions only. Set true_false to a full array. Set multiple_choice, short_answer, flashcards to [].",
-    "mix": "Generate a balanced mix: 4 multiple-choice, 3 short-answer, 3 true/false, and 4 flashcards.",
-  };
-
-  const SYSTEM_PROMPT = `You are a university-level study assistant. Generate high-quality study questions targeting key concepts.
-
-You MUST output valid JSON only — no markdown, no code fences, no explanation, nothing outside the JSON object.
-
-Output format:
-{"multiple_choice": [{"question": "", "options": ["A) …", "B) …", "C) …", "D) …"], "answer": "A"}], "short_answer": [{"question": "", "answer": ""}], "true_false": [{"statement": "", "answer": "True"}], "flashcards": [{"question": "", "answer": ""}]}
-
-Rules:
-- multiple_choice options MUST be a JSON array of strings
-- multiple_choice answer is just the letter e.g. "B"
-- true_false answer is exactly "True" or "False"
-- Always include all four keys even if empty
-- Do NOT use actual newline characters inside any string value
-- Do NOT wrap output in markdown`;
-
-  const userPrompt = `${instructions[mode]}\n\nSource text:\n${text}`;
+  if (!text) {
+    return makeResponse(422, { detail: "Text cannot be empty" });
+  }
+  if (text.length < 10) {
+    return makeResponse(422, { detail: "Text too short (min 10 characters)" });
+  }
+  if (text.length > 12000) {
+    return makeResponse(422, { detail: "Text too long (max 12000 characters)" });
+  }
+  if (!ALLOWED_MODES.has(mode)) {
+    return makeResponse(422, { detail: `Invalid mode. Must be one of: ${Array.from(ALLOWED_MODES).join(", ")}` });
+  }
 
   try {
-    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const upstream = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
+        model: DEFAULT_MODEL,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
+          { role: "user", content: buildUserPrompt(mode, text) },
         ],
         max_tokens: 2048,
         temperature: 0.6,
@@ -72,32 +136,25 @@ Rules:
       }),
     });
 
-    if (!groqRes.ok) {
-      const err = await groqRes.json();
-      const status = groqRes.status === 429 ? 429 : 502;
-      return new Response(JSON.stringify({ detail: err.error?.message || "Groq API error" }), { status });
+    const payload = await upstream.json().catch(() => ({}));
+    if (!upstream.ok) {
+      const detail =
+        payload?.error?.message ||
+        payload?.detail ||
+        `Groq API error (${upstream.status})`;
+      return makeResponse(upstream.status, { detail });
     }
 
-    const groqData = await groqRes.json();
-    let raw = groqData.choices[0].message.content.trim();
-    raw = raw.replace(/^```(?:json)?\s*/g, "").replace(/\s*```$/g, "").trim();
-
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return new Response(JSON.stringify({ detail: "No JSON found in model response" }), { status: 500 });
-
-    const parsed = JSON.parse(match[0]);
-    for (const key of ["multiple_choice", "short_answer", "true_false", "flashcards"]) {
-      if (!parsed[key]) parsed[key] = [];
+    const raw = payload?.choices?.[0]?.message?.content;
+    if (typeof raw !== "string" || !raw.trim()) {
+      return makeResponse(502, { detail: "Groq returned an empty response" });
     }
 
-    return new Response(JSON.stringify(parsed), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+    const parsed = normalizeQuestionSet(parseModelJson(raw));
+    return makeResponse(200, parsed);
+  } catch (error) {
+    return makeResponse(500, {
+      detail: error instanceof Error ? error.message : "Server error",
     });
-
-  } catch (e) {
-    return new Response(JSON.stringify({ detail: `Server error: ${e.message}` }), { status: 500 });
   }
-};
-
-export const config = { path: "/api/generate" };
+}
