@@ -132,7 +132,7 @@ export default function Home() {
   const loadHistory = async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch("/.netlify/functions/generate");
+      const res = await fetch("/api/generate");
       const data = await res.json().catch(() => ({}));
       setHistory(Array.isArray(data.sessions) ? data.sessions : []);
     } finally {
@@ -190,7 +190,7 @@ export default function Home() {
     if (!sourceKind) { setError("Add notes, one PDF, or one or more photos first."); return; }
     setLoading(true); setError("");
     try {
-      const res = await fetch("/.netlify/functions/generate", {
+      const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -218,7 +218,7 @@ export default function Home() {
 
   const openSession = async (id: string) => {
     setError("");
-    const res = await fetch(`/.netlify/functions/generate?sessionId=${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/generate?sessionId=${encodeURIComponent(id)}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { setError(data.detail || "Could not open session."); return; }
     const session = data.session;
@@ -237,7 +237,7 @@ export default function Home() {
   };
 
   const deleteSession = async (id: string) => {
-    const res = await fetch(`/.netlify/functions/generate?sessionId=${encodeURIComponent(id)}`, { method: "DELETE" });
+    const res = await fetch(`/api/generate?sessionId=${encodeURIComponent(id)}`, { method: "DELETE" });
     if (res.ok) {
       if (sessionId === id) resetSession();
       await loadHistory();
