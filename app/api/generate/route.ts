@@ -281,7 +281,11 @@ async function callGroq({ apiKey, model, messages, maxTokens = 2048 }: { apiKey:
   if (!upstream.ok) throw new Error((payload as { error?: { message?: string }; detail?: string })?.error?.message || (payload as { detail?: string })?.detail || `API error (${upstream.status})`);
   const raw = (payload as { choices?: Array<{ message?: { content?: string } }> })?.choices?.[0]?.message?.content;
   if (typeof raw !== "string" || !raw.trim()) throw new Error("Model returned an empty response");
-  return normalizeQuestionSet(parseModelJson(raw));
+  return raw;
+}
+
+async function callGroqJson({ apiKey, model, messages, maxTokens = 2048 }: { apiKey: string; model: string; messages: unknown[]; maxTokens?: number }) {
+  return parseModelJson(await callGroq({ apiKey, model, messages, maxTokens }));
 }
 
 async function generateQuestions({
@@ -301,14 +305,14 @@ async function generateQuestions({
     const text = String((sourcePayload as { text?: string }).text ?? "").trim();
     if (text.length < 10) throw new Error("Text too short (min 10 characters)");
     if (text.length > 12000) throw new Error("Text too long (max 12000 characters)");
-    const questions = await callGroq({
+    const questions = normalizeQuestionSet(await callGroqJson({
       apiKey,
       model: TEXT_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: buildTextPrompt(mode, difficulty, sourceKind === "text" ? "notes" : "pdf", text) },
       ],
-    });
+    }));
     return { questions, modelUsed: TEXT_MODEL };
   }
 
@@ -317,7 +321,7 @@ async function generateQuestions({
     : [];
   const imageParts = attachments.slice(0, 5).map((item) => ({ type: "image_url", image_url: { url: item.dataUrl } }));
   if (!imageParts.length) throw new Error("No usable images were found.");
-  const questions = await callGroq({
+  const questions = normalizeQuestionSet(await callGroqJson({
     apiKey,
     model: VISION_MODEL,
     messages: [
@@ -325,7 +329,7 @@ async function generateQuestions({
       { role: "user", content: [{ type: "text", text: buildVisionPrompt(mode, difficulty, attachments) }, ...imageParts] },
     ],
     maxTokens: 2500,
-  });
+  }));
   return { questions, modelUsed: VISION_MODEL };
 }
 
@@ -402,7 +406,7 @@ Current session context:
 ${contextText}${previousContext}`;
 
   const questions = sourceKind === "image"
-    ? await callGroq({
+    ? normalizeQuestionSet(await callGroqJson({
         apiKey,
         model: VISION_MODEL,
         messages: [
@@ -410,8 +414,8 @@ ${contextText}${previousContext}`;
           { role: "user", content: [{ type: "text", text: prompt }, ...((sourcePayload as { attachments?: AttachmentPayload[] }).attachments ?? []).slice(0, 5).map((item) => ({ type: "image_url", image_url: { url: item.dataUrl } }))] },
         ],
         maxTokens: 2500,
-      })
-    : await callGroq({
+      }))
+    : normalizeQuestionSet(await callGroqJson({
         apiKey,
         model: TEXT_MODEL,
         messages: [
@@ -419,9 +423,44 @@ ${contextText}${previousContext}`;
           { role: "user", content: prompt },
         ],
         maxTokens: 2200,
-      });
+      }));
 
   return questions;
+}
+
+async function evaluateShortAnswers({
+  apiKey,
+  questions,
+  answers,
+}: {
+  apiKey: string;
+  questions: Array<{ question?: string; answer?: string }>;
+  answers: Record<string, string>;
+}) {
+  if (!questions.length) return { score: 0, total: 0, evaluations: [] as Array<Record<string, unknown>> };
+  const prompt = `Evaluate each student answer against the expected answer.
+Return JSON only in this format:
+{"evaluations":[{"index":0,"correct":true,"feedback":"..."}]}
+
+Questions:
+${JSON.stringify(questions.map((q, i) => ({ index: i, question: q.question, expected_answer: q.answer, student_answer: answers[`sa-${i}`] ?? "" })))}`;
+
+  const result = await callGroqJson({
+    apiKey,
+    model: TEXT_MODEL,
+    messages: [
+      { role: "system", content: "You are a strict but fair grading assistant. Return JSON only." },
+      { role: "user", content: prompt },
+    ],
+    maxTokens: 1200,
+  }) as { evaluations?: Array<{ index?: number; correct?: boolean; feedback?: string }> };
+
+  const evaluations = Array.isArray(result.evaluations) ? result.evaluations : [];
+  return {
+    score: evaluations.filter((item) => item.correct).length,
+    total: questions.length,
+    evaluations,
+  };
 }
 
 export async function OPTIONS() {
@@ -487,6 +526,16 @@ export async function POST(request: Request) {
       if (!submission) return makeResponse(422, { detail: "submission is required." });
       await saveTestSubmission({ sessionId, submission });
       return makeResponse(200, { ok: true });
+    }
+
+    if (action === "grade_short_answers") {
+      const questions = Array.isArray((body as { questions?: Array<{ question?: string; answer?: string }> }).questions) ? (body as { questions: Array<{ question?: string; answer?: string }> }).questions : [];
+      const answers = typeof (body as { answers?: Record<string, string> }).answers === "object" && (body as { answers?: Record<string, string> }).answers !== null ? (body as { answers: Record<string, string> }).answers : {};
+      return makeResponse(200, await evaluateShortAnswers({
+        apiKey: process.env.GROQ_API_KEY,
+        questions,
+        answers,
+      }));
     }
 
     if (!ALLOWED_MODES.has(mode)) return makeResponse(422, { detail: "Invalid question format." });
