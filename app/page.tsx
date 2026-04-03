@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Sparkles, BookOpen, ToggleLeft, AlignLeft, Layers, ChevronDown, ChevronUp, Ellipsis, X, Plus, Trash2, CircleHelp } from "lucide-react";
+import { Sparkles, BookOpen, ToggleLeft, AlignLeft, Layers, ChevronDown, ChevronUp, Ellipsis, X, Plus, Trash2, CircleHelp, ClipboardCheck } from "lucide-react";
 
 declare global {
   interface Window {
@@ -35,6 +35,8 @@ type Attachment = { id: string; name: string; type: "pdf" | "image"; extractedTe
 type QuestionSet = { multiple_choice?: any[]; short_answer?: any[]; true_false?: any[]; flashcards?: any[]; };
 type Generation = { id: string; created_at: string; mode: string; difficulty: string; questions: QuestionSet; };
 type SessionListItem = { id: string; title: string; updated_at: string; latest_mode: string; latest_difficulty: string; source_kind: string; };
+type TestAnswers = Record<string, string>;
+type TestSubmission = { id: string; created_at: string; score: number; total: number; answers: TestAnswers; questions: QuestionSet; };
 
 const GLOBAL_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Mono:wght@300;400;500&display=swap');
@@ -42,6 +44,21 @@ const GLOBAL_CSS = `
   textarea:focus{outline:none} textarea::placeholder{color:#857ca2}
   ::selection{background:#a78bfa44;color:#f2efff} ::-webkit-scrollbar{width:6px} ::-webkit-scrollbar-thumb{background:#857ca2;border-radius:99px}
   @keyframes fade-up{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}} @keyframes dot-bounce{0%,100%{transform:translateY(0);opacity:.4}50%{transform:translateY(-5px);opacity:1}}
+  .top-actions{position:fixed;top:18px;left:18px;right:18px;z-index:30;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}
+  .top-actions .push-right{margin-left:auto}
+  .mobile-sheet{width:min(360px,calc(100vw - 32px))}
+  .content-shell{max-width:820px;margin:0 auto;padding:120px 24px 96px;position:relative;z-index:1}
+  .result-grid{margin-top:28px;display:grid;gap:28px;animation:fade-up .5s both}
+  .test-history-pop{position:fixed;top:180px;left:190px;z-index:30;width:min(340px,calc(100vw - 220px));max-height:320px;overflow-y:auto;border-radius:16px;padding:12px;background:rgba(11,11,18,.96);border:1px solid rgba(167,139,250,.18)}
+  @media (max-width: 768px){
+    .content-shell{padding:150px 16px 72px}
+    .top-actions{top:14px;left:14px;right:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .top-actions .push-right{margin-left:0}
+    .top-actions button{width:100%;justify-content:center}
+    .mobile-sheet{width:calc(100vw - 28px)}
+    .test-history-pop{top:170px;left:14px;width:calc(100vw - 28px);max-height:260px}
+    .result-grid{gap:18px}
+  }
 `;
 
 let pdfJsLoader: Promise<void> | null = null;
@@ -67,7 +84,25 @@ function ShortAnswerCard({ q, idx }: { q: any; idx: number; delay?: number }) {
 function TrueFalseCard({ q, idx }: { q: any; idx: number; delay?: number }) {
   const [selected, setSelected] = useState<string | null>(null);
   const correctAnswer = typeof q.answer === "boolean" ? (q.answer ? "True" : "False") : String(q.answer);
-  return <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(248,113,113,0.18)", borderRadius: 16, padding: 18 }}><div style={{ fontSize: 10, color: "#f87171", fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>{String(idx + 1).padStart(2, "0")}</div><div style={{ fontSize: 14, color: "#f2efff", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, marginBottom: 14 }}>{q.statement}</div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{["True", "False"].map((option) => <button key={option} type="button" onClick={() => setSelected(option)} style={{ padding: "10px 16px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: selected === option ? (option === correctAnswer ? "rgba(251,191,36,0.16)" : "rgba(248,113,113,0.16)") : "rgba(255,255,255,0.03)", color: selected === option ? (option === correctAnswer ? "#fbbf24" : "#f87171") : "#f2efff", cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{option}</button>)}</div>{selected && selected !== correctAnswer && <div style={{ marginTop: 12, color: "#fbbf24", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>Correct: {correctAnswer}</div>}</div>;
+  return <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(248,113,113,0.18)", borderRadius: 16, padding: 18 }}><div style={{ fontSize: 10, color: "#f87171", fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>{String(idx + 1).padStart(2, "0")}</div><div style={{ fontSize: 14, color: "#f2efff", fontFamily: "'DM Mono', monospace", lineHeight: 1.7, marginBottom: 14 }}>{q.statement}</div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{["True", "False"].map((option) => { const isChosen = selected === option; const isCorrect = option === correctAnswer; return <button key={option} type="button" onClick={() => setSelected(option)} style={{ padding: "10px 16px", borderRadius: 12, border: `1px solid ${isChosen || isCorrect ? (isCorrect ? "rgba(34,197,94,0.45)" : "rgba(248,113,113,0.4)") : "rgba(255,255,255,0.1)"}`, background: isCorrect ? "rgba(34,197,94,0.18)" : isChosen ? "rgba(248,113,113,0.16)" : "rgba(255,255,255,0.03)", color: isCorrect ? "#22c55e" : isChosen ? "#f87171" : "#f2efff", cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{option}</button>; })}</div></div>;
+}
+
+function MCQRevealCard({ q, idx }: { q: any; idx: number }) {
+  const [revealed, setRevealed] = useState(false);
+  const options = Array.isArray(q.options) ? q.options : [];
+  const answerLetter = String(q.answer ?? "").trim().toUpperCase().match(/[A-D]/)?.[0] || "";
+  return <Glass><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#a78bfa", marginBottom: 10 }}>{String(idx + 1).padStart(2, "0")}</div><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 14, marginBottom: 14 }}>{q.question}</div><div style={{ display: "grid", gap: 8, marginBottom: 12 }}>{options.map((opt: string, optIndex: number) => { const optionLetter = String(opt).trim().charAt(0).toUpperCase(); const isCorrect = revealed && optionLetter === answerLetter; return <div key={optIndex} style={{ padding: "10px 12px", borderRadius: 10, background: isCorrect ? "rgba(34,197,94,0.16)" : "rgba(255,255,255,0.03)", border: `1px solid ${isCorrect ? "rgba(34,197,94,0.35)" : "rgba(255,255,255,0.06)"}`, color: isCorrect ? "#22c55e" : "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{opt}</div>; })}</div><button type="button" onClick={() => setRevealed((v) => !v)} style={{ padding: "8px 14px", borderRadius: 999, border: "1px solid rgba(167,139,250,0.22)", background: "transparent", color: "#ddd6fe", cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>{revealed ? `HIDE ANSWER` : "REVEAL ANSWER"}</button>{revealed && <div style={{ marginTop: 10, color: "#22c55e", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>Correct answer: {answerLetter}</div>}</Glass>;
+}
+
+function TestMCQCard({ q, idx, answer, onAnswer, showResults }: { q: any; idx: number; answer?: string; onAnswer: (value: string) => void; showResults: boolean; }) {
+  const options = Array.isArray(q.options) ? q.options : [];
+  const correct = String(q.answer ?? "").trim().toUpperCase().match(/[A-D]/)?.[0] || "";
+  return <Glass><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#a78bfa", marginBottom: 10 }}>{String(idx + 1).padStart(2, "0")}</div><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 14, marginBottom: 14 }}>{q.question}</div><div style={{ display: "grid", gap: 8 }}>{options.map((opt: string, i: number) => { const letter = String(opt).trim().charAt(0).toUpperCase(); const isPicked = answer === letter; const isCorrect = showResults && letter === correct; const isWrongPick = showResults && isPicked && letter !== correct; return <button key={i} type="button" onClick={() => onAnswer(letter)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 10, background: isCorrect ? "rgba(34,197,94,0.16)" : isWrongPick ? "rgba(248,113,113,0.16)" : isPicked ? "rgba(167,139,250,0.16)" : "rgba(255,255,255,0.03)", border: `1px solid ${isCorrect ? "rgba(34,197,94,0.35)" : isWrongPick ? "rgba(248,113,113,0.35)" : isPicked ? "rgba(167,139,250,0.35)" : "rgba(255,255,255,0.06)"}`, color: "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 12, cursor: showResults ? "default" : "pointer" }} disabled={showResults}>{opt}</button>; })}</div>{showResults && <div style={{ marginTop: 10, color: "#22c55e", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>Correct answer: {correct}</div>}</Glass>;
+}
+
+function TestTFCard({ q, idx, answer, onAnswer, showResults }: { q: any; idx: number; answer?: string; onAnswer: (value: string) => void; showResults: boolean; }) {
+  const correct = typeof q.answer === "boolean" ? (q.answer ? "True" : "False") : String(q.answer);
+  return <Glass><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#f87171", marginBottom: 10 }}>{String(idx + 1).padStart(2, "0")}</div><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 14, marginBottom: 14 }}>{q.statement}</div><div style={{ display: "flex", gap: 8 }}>{["True", "False"].map((opt) => { const isPicked = answer === opt; const isCorrect = showResults && opt === correct; const isWrongPick = showResults && isPicked && opt !== correct; return <button key={opt} type="button" onClick={() => onAnswer(opt)} disabled={showResults} style={{ padding: "10px 16px", borderRadius: 12, background: isCorrect ? "rgba(34,197,94,0.16)" : isWrongPick ? "rgba(248,113,113,0.16)" : isPicked ? "rgba(167,139,250,0.16)" : "rgba(255,255,255,0.03)", border: `1px solid ${isCorrect ? "rgba(34,197,94,0.35)" : isWrongPick ? "rgba(248,113,113,0.35)" : isPicked ? "rgba(167,139,250,0.35)" : "rgba(255,255,255,0.06)"}`, color: "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 12, cursor: showResults ? "default" : "pointer" }}>{opt}</button>; })}</div>{showResults && <div style={{ marginTop: 10, color: "#22c55e", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>Correct answer: {correct}</div>}</Glass>;
 }
 
 function loadScript(src: string) {
@@ -128,6 +163,15 @@ export default function Home() {
   const [history, setHistory] = useState<SessionListItem[]>([]);
   const [helpOpen, setHelpOpen] = useState(true);
   const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
+  const [testPromptOpen, setTestPromptOpen] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [testQuestions, setTestQuestions] = useState<QuestionSet | null>(null);
+  const [testAnswers, setTestAnswers] = useState<TestAnswers>({});
+  const [testSubmitted, setTestSubmitted] = useState(false);
+  const [testScore, setTestScore] = useState<{ score: number; total: number } | null>(null);
+  const [showTestResults, setShowTestResults] = useState(false);
+  const [testSubmissions, setTestSubmissions] = useState<TestSubmission[]>([]);
+  const [testHistoryOpen, setTestHistoryOpen] = useState(false);
 
   const loadHistory = async () => {
     setHistoryLoading(true);
@@ -141,7 +185,7 @@ export default function Home() {
   };
 
   const resetSession = () => {
-    setSessionId(null); setSessionTitle("New session"); setSourceKind(null); setText(""); setAttachments([]); setQuestions(null); setGenerations([]); setActiveGenerationId(null); setUploadStatus(""); setError("");
+    setSessionId(null); setSessionTitle("New session"); setSourceKind(null); setText(""); setAttachments([]); setQuestions(null); setGenerations([]); setActiveGenerationId(null); setUploadStatus(""); setError(""); setTestPromptOpen(false); setTestMode(false); setTestQuestions(null); setTestAnswers({}); setTestSubmitted(false); setTestScore(null); setShowTestResults(false); setTestSubmissions([]); setTestHistoryOpen(false);
   };
 
   const toggleHistory = async () => {
@@ -232,8 +276,15 @@ export default function Home() {
     setGenerations(Array.isArray(session.generations) ? session.generations : []);
     setQuestions(session.latest_generation?.questions ?? null);
     setActiveGenerationId(session.latest_generation?.id ?? null);
+    setTestSubmissions(Array.isArray(session.test_submissions) ? session.test_submissions : []);
     setUploadStatus("");
     setHistoryOpen(false);
+    setTestMode(false);
+    setTestQuestions(null);
+    setTestAnswers({});
+    setTestSubmitted(false);
+    setTestScore(null);
+    setShowTestResults(false);
   };
 
   const deleteSession = async (id: string) => {
@@ -258,18 +309,98 @@ export default function Home() {
     setActiveGenerationId(generation.id);
   };
 
+  const startTest = async (includePrevious: boolean) => {
+    if (!sessionId) { setError("Generate at least one question set in this session before taking a test."); return; }
+    setLoading(true);
+    setError("");
+    setTestPromptOpen(false);
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "generate_test", sessionId, includePrevious }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Could not generate test.");
+      setTestQuestions(data.questions ?? null);
+      setTestAnswers({});
+      setTestSubmitted(false);
+      setShowTestResults(false);
+      setTestScore(null);
+      setTestMode(true);
+    } catch (err: any) {
+      setError(err.message || "Could not generate test.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const setTestAnswer = (key: string, value: string) => {
+    if (testSubmitted) return;
+    setTestAnswers((current) => ({ ...current, [key]: value }));
+  };
+
+  const submitTest = async () => {
+    if (!testQuestions || !sessionId) return;
+    let score = 0;
+    let total = 0;
+    const mcq = Array.isArray(testQuestions.multiple_choice) ? testQuestions.multiple_choice : [];
+    mcq.forEach((q, i) => {
+      total += 1;
+      const expected = String(q.answer ?? "").trim().toUpperCase().match(/[A-D]/)?.[0] || "";
+      if ((testAnswers[`mcq-${i}`] ?? "") === expected) score += 1;
+    });
+    const tf = Array.isArray(testQuestions.true_false) ? testQuestions.true_false : [];
+    tf.forEach((q, i) => {
+      total += 1;
+      const expected = typeof q.answer === "boolean" ? (q.answer ? "True" : "False") : String(q.answer);
+      if ((testAnswers[`tf-${i}`] ?? "") === expected) score += 1;
+    });
+    const payload: TestSubmission = { id: `${Date.now()}`, created_at: new Date().toISOString(), score, total, answers: testAnswers, questions: testQuestions };
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "submit_test", sessionId, submission: payload }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.detail || "Could not save test submission.");
+      return;
+    }
+    setTestSubmissions((current) => [...current, payload]);
+    setTestSubmitted(true);
+    setTestScore({ score, total });
+  };
+
+  const openTestSubmission = (submission: TestSubmission) => {
+    setTestQuestions(submission.questions);
+    setTestAnswers(submission.answers);
+    setTestSubmitted(true);
+    setTestScore({ score: submission.score, total: submission.total });
+    setShowTestResults(true);
+    setTestMode(true);
+    setTestHistoryOpen(false);
+  };
+
   return (
     <main style={{ minHeight: "100vh", background: "linear-gradient(180deg,#06060b 0%,#0b0b12 45%,#11111a 100%)", color: "#f2efff", fontFamily: "'Cormorant Garamond', serif", position: "relative" }}>
       <style>{GLOBAL_CSS}</style>
-      <button type="button" onClick={toggleHistory} style={{ position: "fixed", top: 18, right: 18, zIndex: 30, width: 46, height: 46, borderRadius: 14, border: "1px solid rgba(167,139,250,0.22)", background: "rgba(11,11,18,0.88)", color: "#f2efff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>{historyOpen ? <X size={18} /> : <Ellipsis size={18} />}</button>
-      <button type="button" onClick={resetSession} style={{ position: "fixed", top: 18, left: 18, zIndex: 30, padding: "12px 16px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.22)", background: "rgba(11,11,18,0.88)", color: "#f2efff", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}><Plus size={16} />NEW SESSION</button>
+      <div className="top-actions">
+        <button type="button" onClick={resetSession} style={{ padding: "12px 16px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.22)", background: "rgba(11,11,18,0.88)", color: "#f2efff", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}><Plus size={16} />NEW SESSION</button>
+        <button type="button" onClick={() => setTestPromptOpen(true)} style={{ padding: "12px 16px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.22)", background: "rgba(11,11,18,0.88)", color: "#f2efff", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}><ClipboardCheck size={16} />TAKE TEST</button>
+        <button type="button" onClick={toggleHistory} className="push-right" style={{ width: 46, height: 46, borderRadius: 14, border: "1px solid rgba(167,139,250,0.22)", background: "rgba(11,11,18,0.88)", color: "#f2efff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>{historyOpen ? <X size={18} /> : <Ellipsis size={18} />}</button>
+        {testSubmitted && <button type="button" onClick={() => setShowTestResults((v) => !v)} style={{ padding: "12px 16px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.22)", background: "rgba(11,11,18,0.88)", color: "#f2efff", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>SEE RESULT</button>}
+        {!!testSubmissions.length && <button type="button" onClick={() => setTestHistoryOpen((v) => !v)} style={{ padding: "12px 16px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.22)", background: "rgba(11,11,18,0.88)", color: "#f2efff", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{testHistoryOpen ? "HIDE TESTS" : "TEST HISTORY"}</button>}
+      </div>
+      {testHistoryOpen && !!testSubmissions.length && <div className="test-history-pop">{[...testSubmissions].reverse().map((submission, index) => <button key={submission.id} type="button" onClick={() => openTestSubmission(submission)} style={{ width: "100%", textAlign: "left", padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#f2efff", cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12, marginBottom: index === testSubmissions.length - 1 ? 0 : 8 }}><div style={{ marginBottom: 6 }}>Submission {testSubmissions.length - index}</div><div style={{ color: "#a59dbd", fontSize: 10 }}>{new Date(submission.created_at).toLocaleString()} • {submission.score}/{submission.total}</div></button>)}</div>}
+      {testPromptOpen && <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(6,6,11,0.62)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}><div className="mobile-sheet" style={{ background: "rgba(11,11,18,0.98)", border: "1px solid rgba(167,139,250,0.18)", borderRadius: 20, padding: 22 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ color: "#f9a8d4", fontFamily: "'DM Mono', monospace", fontSize: 12, letterSpacing: 2 }}>TAKE TEST</div><button type="button" onClick={() => setTestPromptOpen(false)} style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid rgba(248,113,113,0.22)", background: "rgba(248,113,113,0.08)", color: "#f87171", cursor: "pointer" }}><X size={16} /></button></div><div style={{ color: "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 13, lineHeight: 1.8, marginBottom: 16 }}>Choose how the test should be built.</div><div style={{ display: "grid", gap: 10 }}><button type="button" onClick={() => startTest(true)} style={{ textAlign: "left", padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.18)", background: "rgba(167,139,250,0.08)", color: "#f2efff", cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>INCLUDE PREVIOUS SESSION QUESTIONS</button><button type="button" onClick={() => startTest(false)} style={{ textAlign: "left", padding: "14px 16px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.18)", background: "rgba(255,255,255,0.04)", color: "#f2efff", cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>USE JUST THIS SESSION</button></div></div></div>}
       {historyOpen && <aside style={{ position: "fixed", top: 76, left: 16, width: "min(360px, calc(100vw - 32px))", maxHeight: "calc(100vh - 92px)", overflowY: "auto", zIndex: 25, borderRadius: 22, padding: 16, background: "rgba(11,11,18,0.96)", border: "1px solid rgba(167,139,250,0.18)" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {historyLoading ? <p style={{ color: "#a59dbd", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>Loading sessions...</p> : history.map((item) => <div key={item.id} style={{ display: "flex", gap: 8, alignItems: "stretch" }}><button type="button" onClick={() => openSession(item.id)} style={{ flex: 1, textAlign: "left", padding: 14, borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: sessionId === item.id ? "rgba(167,139,250,0.14)" : "rgba(255,255,255,0.03)", color: "#f2efff", cursor: "pointer" }}><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, marginBottom: 6 }}>{item.title}</div><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#a59dbd" }}>{item.latest_mode} • {item.latest_difficulty}</div></button><button type="button" onClick={() => deleteSession(item.id)} style={{ width: 44, borderRadius: 14, border: "1px solid rgba(248,113,113,0.2)", background: "rgba(248,113,113,0.08)", color: "#f87171", cursor: "pointer" }}><Trash2 size={16} /></button></div>)}
           {!historyLoading && history.length === 0 && <p style={{ color: "#a59dbd", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>No saved sessions yet.</p>}
         </div>
       </aside>}
-      <div style={{ maxWidth: 820, margin: "0 auto", padding: "78px 24px 96px", position: "relative", zIndex: 1 }}>
+      <div className="content-shell">
         <div style={{ textAlign: "center", marginBottom: 36, animation: "fade-up .6s both" }}>
           <div style={{ fontSize: 11, color: "#a78bfa", letterSpacing: 5, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>STUDY BUDDY</div>
           <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-start", gap: 10 }}>
@@ -279,9 +410,9 @@ export default function Home() {
           <p style={{ color: "#a59dbd", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{sessionTitle}</p>
         </div>
 
-        {helpOpen && <div style={{ marginBottom: 22 }}><Glass><div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start" }}><div><div style={{ fontSize: 11, color: "#f9a8d4", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>HOW TO USE</div><div style={{ color: "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 12, lineHeight: 1.8 }}>Start one session with only one source type: pasted notes, one PDF, or one or more photos. After that, you can change difficulty and question format as many times as you want for that same session. Click `NEW SESSION` only when you want to start over with a different source.</div></div><button type="button" onClick={() => setHelpOpen(false)} style={{ width: 34, height: 34, borderRadius: 12, border: "1px solid rgba(248,113,113,0.22)", background: "rgba(248,113,113,0.08)", color: "#f87171", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}><X size={16} /></button></div></Glass></div>}
+        {helpOpen && <div style={{ marginBottom: 22 }}><Glass><div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start" }}><div><div style={{ fontSize: 11, color: "#f9a8d4", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>HOW TO USE</div><div style={{ color: "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 12, lineHeight: 1.8 }}>Start one session with only one source type: pasted notes, one PDF, or one or more photos. After that, you can change difficulty and question format as many times as you want for that same session. Use `TAKE TEST` to create a test from this session or mix in previous sessions. After submitting, use `SEE RESULT` or the test history dropdown to review your score and what you got wrong.</div></div><button type="button" onClick={() => setHelpOpen(false)} style={{ width: 34, height: 34, borderRadius: 12, border: "1px solid rgba(248,113,113,0.22)", background: "rgba(248,113,113,0.08)", color: "#f87171", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}><X size={16} /></button></div></Glass></div>}
 
-        <Glass>
+        {!testMode && <Glass>
           <div style={{ display: "grid", gap: 22 }}>
             <div>
               <div style={{ fontSize: 10, color: "#f9a8d4", letterSpacing: 3, fontFamily: "'DM Mono', monospace", marginBottom: 10 }}>NOTES</div>
@@ -323,10 +454,12 @@ export default function Home() {
               {loading ? <><div style={{ width: 6, height: 6, borderRadius: "50%", background: "#06060b", animation: "dot-bounce .8s 0s infinite" }} /><div style={{ width: 6, height: 6, borderRadius: "50%", background: "#06060b", animation: "dot-bounce .8s .2s infinite" }} /><div style={{ width: 6, height: 6, borderRadius: "50%", background: "#06060b", animation: "dot-bounce .8s .4s infinite" }} /><span>GENERATING</span></> : <><Sparkles size={15} /><span>GENERATE QUESTIONS</span></>}
             </button>
           </div>
-        </Glass>
+        </Glass>}
+
+        {testMode && testQuestions && <Glass><div style={{ display: "grid", gap: 22 }}><div style={{ color: "#f9a8d4", fontFamily: "'DM Mono', monospace", fontSize: 12, letterSpacing: 2 }}>TEST MODE</div>{testScore && <div style={{ color: "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 13 }}>Score: {testScore.score}/{testScore.total}</div>}{testQuestions.multiple_choice?.length ? <div><SectionLabel text={`Multiple Choice • ${testQuestions.multiple_choice.length}`} color="#a78bfa" /><div style={{ display: "grid", gap: 12 }}>{testQuestions.multiple_choice.map((q, i) => <TestMCQCard key={i} q={q} idx={i} answer={testAnswers[`mcq-${i}`]} onAnswer={(value) => setTestAnswer(`mcq-${i}`, value)} showResults={showTestResults} />)}</div></div> : null}{testQuestions.true_false?.length ? <div><SectionLabel text={`True / False • ${testQuestions.true_false.length}`} color="#f87171" /><div style={{ display: "grid", gap: 12 }}>{testQuestions.true_false.map((q, i) => <TestTFCard key={i} q={q} idx={i} answer={testAnswers[`tf-${i}`]} onAnswer={(value) => setTestAnswer(`tf-${i}`, value)} showResults={showTestResults} />)}</div></div> : null}{testQuestions.short_answer?.length ? <div><SectionLabel text={`Short Answer • ${testQuestions.short_answer.length}`} color="#f9a8d4" /><div style={{ display: "grid", gap: 12 }}>{testQuestions.short_answer.map((q, i) => <Glass key={i}><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#f9a8d4", marginBottom: 10 }}>{String(i + 1).padStart(2, "0")}</div><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 14, marginBottom: 14 }}>{q.question}</div>{showTestResults && <div style={{ padding: "12px 14px", borderRadius: 12, background: "rgba(249,168,212,0.08)", color: "#fbcfe8", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>Answer: {q.answer}</div>}</Glass>)}</div></div> : null}<div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{!testSubmitted && <button type="button" onClick={submitTest} style={{ padding: "14px 18px", borderRadius: 14, border: "none", background: "linear-gradient(135deg,#857ca2,#a78bfa,#f9a8d4)", color: "#06060b", fontFamily: "'DM Mono', monospace", fontWeight: 700, cursor: "pointer" }}>SUBMIT TEST</button>}<button type="button" onClick={() => { setTestMode(false); setShowTestResults(false); }} style={{ padding: "14px 18px", borderRadius: 14, border: "1px solid rgba(167,139,250,0.2)", background: "rgba(255,255,255,0.04)", color: "#f2efff", fontFamily: "'DM Mono', monospace", cursor: "pointer" }}>EXIT TEST</button></div></div></Glass>}
 
         {hasResults && <div style={{ marginTop: 28, display: "grid", gap: 28, animation: "fade-up .5s both" }}>
-          {questions?.multiple_choice?.length ? <div><SectionLabel text={`Multiple Choice • ${questions.multiple_choice.length}`} color="#a78bfa" /><div style={{ display: "grid", gap: 12 }}>{questions.multiple_choice.map((q, i) => <Glass key={i}><div style={{ fontFamily: "'DM Mono', monospace", fontSize: 14, marginBottom: 14 }}>{q.question}</div><div style={{ display: "grid", gap: 8 }}>{(Array.isArray(q.options) ? q.options : []).map((opt: string, idx: number) => <div key={idx} style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(255,255,255,0.03)", color: "#f2efff", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>{opt}</div>)}</div></Glass>)}</div></div> : null}
+          {questions?.multiple_choice?.length ? <div><SectionLabel text={`Multiple Choice • ${questions.multiple_choice.length}`} color="#a78bfa" /><div style={{ display: "grid", gap: 12 }}>{questions.multiple_choice.map((q, i) => <MCQRevealCard key={i} q={q} idx={i} />)}</div></div> : null}
           {questions?.short_answer?.length ? <div><SectionLabel text={`Short Answer • ${questions.short_answer.length}`} color="#f9a8d4" /><div style={{ display: "grid", gap: 12 }}>{questions.short_answer.map((q, i) => <ShortAnswerCard key={i} q={q} idx={i} delay={i * 60} />)}</div></div> : null}
           {questions?.true_false?.length ? <div><SectionLabel text={`True / False • ${questions.true_false.length}`} color="#f87171" /><div style={{ display: "grid", gap: 12 }}>{questions.true_false.map((q, i) => <TrueFalseCard key={i} q={q} idx={i} delay={i * 60} />)}</div></div> : null}
           {questions?.flashcards?.length ? <div><SectionLabel text={`Flashcards • ${questions.flashcards.length}`} color="#ddd6fe" /><div style={{ display: "grid", gap: 12 }}>{questions.flashcards.map((q, i) => <Flashcard key={i} q={q} idx={i} />)}</div></div> : null}
