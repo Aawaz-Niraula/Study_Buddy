@@ -108,8 +108,8 @@ function getDbClient() {
 async function ensureSchema(db: ReturnType<typeof createClient> | null) {
   if (!db) return;
   if (!schemaReadyPromise) {
-    schemaReadyPromise = db.batch([
-      `CREATE TABLE IF NOT EXISTS app_sessions (
+    schemaReadyPromise = (async () => {
+      await db.execute(`CREATE TABLE IF NOT EXISTS app_sessions (
         id TEXT PRIMARY KEY,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -117,11 +117,15 @@ async function ensureSchema(db: ReturnType<typeof createClient> | null) {
         source_kind TEXT NOT NULL,
         source_payload_json TEXT NOT NULL,
         generations_json TEXT NOT NULL,
+        test_submissions_json TEXT NOT NULL DEFAULT '[]',
         latest_mode TEXT NOT NULL,
         latest_difficulty TEXT NOT NULL
-      )`,
-      `CREATE INDEX IF NOT EXISTS idx_app_sessions_updated_at ON app_sessions(updated_at DESC)`,
-    ], "write");
+      )`);
+      await db.execute(`CREATE INDEX IF NOT EXISTS idx_app_sessions_updated_at ON app_sessions(updated_at DESC)`);
+      try {
+        await db.execute(`ALTER TABLE app_sessions ADD COLUMN test_submissions_json TEXT NOT NULL DEFAULT '[]'`);
+      } catch {}
+    })();
   }
   await schemaReadyPromise;
 }
@@ -175,6 +179,7 @@ async function getSessionById(id: string) {
   const row = result.rows[0];
   if (!row) return null;
   const generations = JSON.parse(String(row.generations_json ?? "[]"));
+  const testSubmissions = JSON.parse(String(row.test_submissions_json ?? "[]"));
   return {
     id: String(row.id),
     created_at: String(row.created_at),
@@ -185,6 +190,7 @@ async function getSessionById(id: string) {
     latest_mode: String(row.latest_mode),
     latest_difficulty: String(row.latest_difficulty),
     generations,
+    test_submissions: testSubmissions,
     latest_generation: generations[generations.length - 1] ?? null,
   };
 }
@@ -246,6 +252,25 @@ async function saveGeneration({
   return { sessionId: id, stored: true };
 }
 
+async function saveTestSubmission({
+  sessionId,
+  submission,
+}: {
+  sessionId: string;
+  submission: Record<string, unknown>;
+}) {
+  const db = getDbClient();
+  if (!db) return;
+  await ensureSchema(db);
+  const existing = await getSessionById(sessionId);
+  if (!existing) throw new Error("Session not found.");
+  const submissions = [...(existing.test_submissions ?? []), submission];
+  await db.execute({
+    sql: `UPDATE app_sessions SET updated_at = ?, test_submissions_json = ? WHERE id = ?`,
+    args: [new Date().toISOString(), JSON.stringify(submissions), sessionId],
+  });
+}
+
 async function callGroq({ apiKey, model, messages, maxTokens = 2048 }: { apiKey: string; model: string; messages: unknown[]; maxTokens?: number }) {
   const upstream = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -304,6 +329,101 @@ async function generateQuestions({
   return { questions, modelUsed: VISION_MODEL };
 }
 
+function flattenQuestions(questionSet: Record<string, unknown>) {
+  const result: Array<Record<string, unknown>> = [];
+  for (const item of (Array.isArray(questionSet.multiple_choice) ? questionSet.multiple_choice : [])) {
+    result.push({ kind: "multiple-choice", ...item as object });
+  }
+  for (const item of (Array.isArray(questionSet.true_false) ? questionSet.true_false : [])) {
+    result.push({ kind: "true-false", ...item as object });
+  }
+  for (const item of (Array.isArray(questionSet.short_answer) ? questionSet.short_answer : [])) {
+    result.push({ kind: "short-answer", ...item as object });
+  }
+  return result;
+}
+
+function samplePreviousQuestions(sessions: Array<Record<string, unknown>>, limit = 6) {
+  const bag: Array<Record<string, unknown>> = [];
+  for (const session of sessions) {
+    const generations = Array.isArray(session.generations) ? session.generations : [];
+    for (const generation of generations.slice(-2)) {
+      bag.push(...flattenQuestions((generation as { questions?: Record<string, unknown> }).questions ?? {}));
+    }
+  }
+  return bag.slice(0, limit);
+}
+
+async function generateTest({
+  apiKey,
+  session,
+  includePrevious,
+}: {
+  apiKey: string;
+  session: Awaited<ReturnType<typeof getSessionById>>;
+  includePrevious: boolean;
+}) {
+  if (!session) throw new Error("Session not found.");
+  const sourceKind = session.source_kind;
+  const sourcePayload = session.source_payload as SourcePayload;
+  let contextText = "";
+
+  if (sourceKind === "text" || sourceKind === "pdf") {
+    contextText = String((sourcePayload as { text?: string }).text ?? "").trim();
+  } else {
+    contextText = "Generate a test from the uploaded images in this current session.";
+  }
+
+  let previousContext = "";
+  if (includePrevious) {
+    const sessions = await listSessions();
+    const others = [];
+    for (const item of sessions) {
+      if (item.id === session.id) continue;
+      const full = await getSessionById(item.id);
+      if (full) others.push(full);
+      if (others.length >= 4) break;
+    }
+    const sampled = samplePreviousQuestions(others);
+    if (sampled.length) {
+      previousContext = `\nAlso include a mix of concepts inspired by these previous study questions:\n${JSON.stringify(sampled)}`;
+    }
+  }
+
+  const prompt = `Create a closed-book test for this student.
+Generate:
+- 6 multiple-choice
+- 4 true/false
+- 3 short-answer
+
+Use the current session as the main source.${includePrevious ? " Blend in a few ideas from previous sessions too." : ""}
+
+Current session context:
+${contextText}${previousContext}`;
+
+  const questions = sourceKind === "image"
+    ? await callGroq({
+        apiKey,
+        model: VISION_MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: [{ type: "text", text: prompt }, ...((sourcePayload as { attachments?: AttachmentPayload[] }).attachments ?? []).slice(0, 5).map((item) => ({ type: "image_url", image_url: { url: item.dataUrl } }))] },
+        ],
+        maxTokens: 2500,
+      })
+    : await callGroq({
+        apiKey,
+        model: TEXT_MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        maxTokens: 2200,
+      });
+
+  return questions;
+}
+
 export async function OPTIONS() {
   return makeResponse(200, {});
 }
@@ -342,11 +462,32 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     if (!body) return makeResponse(400, { detail: "Invalid JSON body" });
 
+    const action = String((body as { action?: string }).action ?? "generate");
     const mode = String((body as { mode?: string }).mode ?? "mix");
     const difficulty = String((body as { difficulty?: string }).difficulty ?? "medium");
     const text = String((body as { text?: string }).text ?? "").trim();
     const attachments = Array.isArray((body as { attachments?: AttachmentPayload[] }).attachments) ? (body as { attachments: AttachmentPayload[] }).attachments : [];
     const sessionId = (body as { sessionId?: string }).sessionId ? String((body as { sessionId?: string }).sessionId) : null;
+
+    if (action === "generate_test") {
+      if (!sessionId) return makeResponse(422, { detail: "sessionId is required for tests." });
+      const session = await getSessionById(sessionId);
+      if (!session) return makeResponse(404, { detail: "Session not found" });
+      const testQuestions = await generateTest({
+        apiKey: process.env.GROQ_API_KEY,
+        session,
+        includePrevious: Boolean((body as { includePrevious?: boolean }).includePrevious),
+      });
+      return makeResponse(200, { questions: testQuestions });
+    }
+
+    if (action === "submit_test") {
+      if (!sessionId) return makeResponse(422, { detail: "sessionId is required for test submission." });
+      const submission = (body as { submission?: Record<string, unknown> }).submission;
+      if (!submission) return makeResponse(422, { detail: "submission is required." });
+      await saveTestSubmission({ sessionId, submission });
+      return makeResponse(200, { ok: true });
+    }
 
     if (!ALLOWED_MODES.has(mode)) return makeResponse(422, { detail: "Invalid question format." });
     if (!ALLOWED_DIFFICULTIES.has(difficulty)) return makeResponse(422, { detail: "Invalid difficulty." });
